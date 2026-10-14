@@ -50,9 +50,11 @@ final class LocalPhotoProcessor {
     }
 
     static Result process(Context context, Uri original, int preset, boolean portrait,
-                          int blur, boolean png) throws Exception {
+                          int blur, boolean png, NeuralUpscaler.Progress progress) throws Exception {
+        progress.onProgress(0, "Iniciando processamento offline");
         if (original == null) throw new IOException("Foto original indisponível.");
         Bitmap input = load(context, original);
+        progress.onProgress(15, "Fotografia carregada");
         Bitmap adjusted = null;
         Bitmap finalBitmap = null;
         boolean gpu = false;
@@ -62,19 +64,25 @@ final class LocalPhotoProcessor {
             Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
             if (preset > 0) paint.setColorFilter(autoColor(input, preset));
             canvas.drawBitmap(input, 0, 0, paint);
+            progress.onProgress(35, "Correção de brilho e cor concluída");
             if (preset >= 2) {
                 // Mild neighborhood-based denoising, without introducing synthesized scene details.
                 denoise(adjusted, preset == 3 ? 0.18f : 0.1f);
+                progress.onProgress(55, "Redução local de ruído concluída");
             }
             if (preset >= 2) sharpen(adjusted, preset == 3 ? 0.24f : 0.14f);
+            progress.onProgress(70, "Ajustes de nitidez aplicados");
             if (portrait) {
                 PortraitResult result = applyPortrait(context, adjusted, blur);
                 finalBitmap = result.bitmap;
                 gpu = result.gpu;
+                progress.onProgress(88, "Máscara de retrato finalizada");
             } else {
                 finalBitmap = adjusted;
             }
+            progress.onProgress(90, "Salvando cópia processada");
             Uri copy = save(context, finalBitmap, portrait, png);
+            progress.onProgress(100, "Cópia salva na galeria");
             return new Result(copy, portrait
                     ? "Retrato local (" + (gpu ? "GPU" : "CPU") + ") · original preservado"
                     : png ? "PNG exportado · original preservado" : "Foto local salva · original preservado");
