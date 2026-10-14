@@ -50,6 +50,7 @@ dependencies {
     implementation "androidx.camera:camera-video:$cameraVersion"
     implementation "androidx.camera:camera-extensions:$cameraVersion"
     implementation 'com.google.mediapipe:tasks-vision:0.10.29'
+    implementation 'androidx.heifwriter:heifwriter:1.1.0'
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
