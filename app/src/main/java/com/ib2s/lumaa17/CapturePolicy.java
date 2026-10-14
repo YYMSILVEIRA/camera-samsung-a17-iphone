@@ -22,6 +22,13 @@ public final class CapturePolicy {
                 : height >= 720 ? (high ? 12_000_000 : 8_000_000) : 4_000_000;
     }
 
+    /** Ultra bitrate is a request to the encoder, not a guaranteed measured rate. */
+    public static int bitrate(int height, boolean high, boolean ultra) {
+        if (!ultra) return bitrate(height, high);
+        return height >= 2160 ? 80_000_000 : height >= 1080 ? 32_000_000
+                : height >= 720 ? 16_000_000 : 6_000_000;
+    }
+
     public static int rotationDegrees(int orientation) {
         if (orientation < 0) return 0;
         if (orientation >= 315 || orientation < 45) return 0;
