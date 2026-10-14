@@ -17,11 +17,24 @@ import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
 import androidx.test.uiautomator.Until;
 import org.junit.Test;
+import org.junit.Rule;
+import org.junit.rules.TestWatcher;
+import org.junit.runner.Description;
 import org.junit.runner.RunWith;
 
 /** Real file smoke test. An emulator cannot validate the A17's optical quality. */
 @RunWith(AndroidJUnit4.class)
 public class CameraSmokeTest {
+    @Rule public final TestWatcher failureEvidence = new TestWatcher() {
+        @Override protected void failed(Throwable failure, Description description) {
+            try {
+                Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+                UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
+                device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null),"failure.png"));
+                device.dumpWindowHierarchy(new java.io.File(context.getExternalFilesDir(null),"failure.xml"));
+            } catch (Exception ignored) { }
+        }
+    };
     @Test public void savesPhotosAndPlayableVideo() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
@@ -30,13 +43,17 @@ public class CameraSmokeTest {
         context.startActivity(new Intent(context, CameraActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
         waitReady(device);
         capturePhoto(device, context);
+        Uri original = latest(context,false);
         assertTrue(device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null), "camera-fullscreen.png")));
         device.findObject(By.desc("Abrir a última foto ou vídeo")).click();
         assertTrue(device.wait(Until.hasObject(By.text("PNG")),15000));
         device.findObject(By.text("PNG")).click();
         UiObject2 confirm = device.wait(Until.findObject(By.res("android:id/button1")),15000);
         assertNotNull(confirm); confirm.click();
-        assertTrue(device.wait(Until.hasObject(By.text("PNG SDR salvo · mesma resolução do original")),45000));
+        Uri png = awaitPng(context,original);
+        assertEquals("image/png",context.getContentResolver().getType(png));
+        assertTrue(device.wait(Until.hasObject(By.text("Cópia").enabled(true)),15000));
+        device.dumpWindowHierarchy(new java.io.File(context.getExternalFilesDir(null),"photo-review.xml"));
         assertTrue(device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null), "photo-review.png")));
         device.findObject(By.text("Voltar à câmera")).click();
         assertTrue(device.wait(Until.hasObject(By.desc("Alternar câmera frontal e traseira")),15000));
@@ -68,6 +85,21 @@ public class CameraSmokeTest {
     }
     private void waitReady(UiDevice device) {
         assertTrue(device.wait(Until.hasObject(By.textStartsWith("Pronto ·")),45000));
+    }
+    private Uri awaitPng(Context context,Uri original) throws Exception {
+        long deadline=SystemClock.elapsedRealtime()+45000;
+        while(SystemClock.elapsedRealtime()<deadline){
+            Uri candidate=latest(context,false);
+            if(!candidate.equals(original)&&"image/png".equals(context.getContentResolver().getType(candidate))){
+                try(var input=context.getContentResolver().openInputStream(candidate)){
+                    BitmapFactory.Options info=new BitmapFactory.Options();info.inJustDecodeBounds=true;
+                    BitmapFactory.decodeStream(input,null,info);
+                    if(info.outWidth>100&&info.outHeight>100)return candidate;
+                }
+            }
+            SystemClock.sleep(200);
+        }
+        throw new AssertionError("A revisão não publicou um PNG válido na galeria");
     }
     private void capturePhoto(UiDevice device,Context context) throws Exception {
         UiObject2 shutter = device.wait(Until.findObject(By.desc("Tirar foto")),30000);
