@@ -44,6 +44,7 @@ import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -79,7 +80,10 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     private PreviewView preview;
     private CameraOverlay overlay;
     private PreviewFrame previewFrame;
-    private LinearLayout root, modes, tools;
+    private LinearLayout root, modes, tools, processingPanel;
+    private ProgressBar processingBar;
+    private TextView processingLabel;
+    private int lastProcessingPercent=-1;
     private TextView session, status, telemetry, evLabel, zoomLabel, recordingLabel;
     private Button flashButton, timerButton, lensButton, switchButton, settingsButton, proButton, unlockButton, retryButton, pauseButton;
     private SeekBar evBar;
@@ -196,6 +200,17 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         hud.addView(lowerHud,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));
         previewFrame.addView(hud);
         root.addView(previewFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+        processingPanel = column();
+        processingPanel.setPadding(dp(12),dp(5),dp(12),dp(5));
+        processingPanel.setBackgroundColor(PANEL);
+        processingLabel = text("Processamento 0%", 13, Color.WHITE);
+        processingPanel.addView(processingLabel, new LinearLayout.LayoutParams(-1, dp(25)));
+        processingBar = new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
+        processingBar.setMax(100); processingBar.setProgress(0);
+        processingBar.setProgressTintList(ColorStateList.valueOf(GOLD));
+        processingPanel.addView(processingBar,new LinearLayout.LayoutParams(-1,dp(12)));
+        processingPanel.setVisibility(View.GONE);
+        root.addView(processingPanel,new LinearLayout.LayoutParams(-1,dp(51)));
 
         recordingLabel = text("", 14, 0xFFFF6B6B); recordingLabel.setGravity(Gravity.CENTER);
         recordingLabel.setTypeface(Typeface.MONOSPACE); recordingLabel.setVisibility(View.GONE);
@@ -440,8 +455,9 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
 
     private void showReview(Uri original) {
-        String[] actions = {"Ver foto original", "Melhorar offline · tons, ruído e nitidez",
-                "Retrato IA · fundo desfocado", "Salvar cópia PNG", "Salvar cópia HEIC", "Editar cópia no Gemini"};
+        String[] actions = {"Ver foto original", "Super-resolução neural EDSR ×4 (offline)",
+                "Melhorar tons / ruído / nitidez", "Retrato IA · fundo desfocado",
+                "Salvar cópia PNG", "Salvar cópia HEIC", "Editar cópia no Gemini"};
         new AlertDialog.Builder(this).setTitle("Revisar fotografia")
             .setItems(actions, (dialog, which) -> {
                 switch (which) {
@@ -452,14 +468,92 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
                         } catch (ActivityNotFoundException ex) { toast("Abra a galeria para visualizar a foto."); }
                         break;
-                    case 1: processLocal(original, Math.max(1, settings.localPreset), false, false); break;
-                    case 2: processLocal(original, settings.localPreset, true, false); break;
-                    case 3: processLocal(original, 0, false, true); break;
-                    case 4: exportHeic(original); break;
-                    case 5: improvePhoto(original,true); break;
+                    case 1: startSuperResolution(original); break;
+                    case 2: processLocal(original, Math.max(1, settings.localPreset), false, false); break;
+                    case 3: processLocal(original, settings.localPreset, true, false); break;
+                    case 4: processLocal(original, 0, false, true); break;
+                    case 5: exportHeic(original); break;
+                    case 6: improvePhoto(original,true); break;
                     default: break;
                 }
             }).setNegativeButton("Voltar à câmera", null).show();
+    }
+
+    private void showProcessing(int percent, String stage) {
+        runOnUiThread(() -> {
+            if (destroyed || processingPanel == null) return;
+            int value = Math.max(0, Math.min(100, percent));
+            if (value == lastProcessingPercent && value != 0) return;
+            lastProcessingPercent = value;
+            processingPanel.setVisibility(View.VISIBLE);
+            processingBar.setProgress(value);
+            processingLabel.setText(value + "% · " + stage);
+            status.setText(stage + " (" + value + "%)");
+        });
+    }
+
+    private void finishProcessing() {
+        processingPanel.setVisibility(View.GONE);
+        lastProcessingPercent = -1;
+    }
+
+    private void showProcessed(Uri original, Uri processed, String message) {
+        if (destroyed || isFinishing()) return;
+        lastUri = processed; lastVideo = false;
+        files.execute(() -> {
+            try {
+                Bitmap img = getContentResolver().loadThumbnail(processed,new Size(150,150),null);
+                runOnUiThread(() -> {
+                    if (!destroyed && processed.equals(lastUri)) thumbnail.setImageBitmap(img);
+                });
+            } catch(Exception ignored) {}
+        });
+        PhotoResultDialog.show(this,files,original,processed,message);
+    }
+
+    private void startSuperResolution(Uri original) {
+        if (localInProgress) { toast("Aguarde o processamento anterior."); return; }
+        new AlertDialog.Builder(this).setTitle("Super-resolução neural EDSR ×4")
+            .setMessage("O modelo offline amplia imagens por IA. Uma foto grande pode ser reduzida antes da rede para respeitar a memória do A17. Novos pixels podem melhorar a aparência, mas não são detalhes originais garantidos. O JPEG original será preservado.\n\nO modo maior usa mais RAM e pode demorar.")
+            .setNegativeButton("Cancelar",null)
+            .setNeutralButton("Equilibrado", (d,w)->runSuperResolution(original,false))
+            .setPositiveButton("Maior resolução", (d,w)->runSuperResolution(original,true)).show();
+    }
+
+    private void runSuperResolution(Uri original,boolean maximum) {
+        if (localInProgress) { toast("Processamento em andamento."); return; }
+        localInProgress = true;
+        showProcessing(0,"Preparando modelo neural offline");
+        files.execute(() -> {
+            try {
+                NeuralUpscaler.Result out = NeuralUpscaler.upscale(
+                        getApplicationContext(),original,maximum,this::showProcessing);
+                runOnUiThread(() -> {
+                    localInProgress = false;
+                    if (destroyed) return;
+                    finishProcessing();
+                    String report = String.format(Locale.getDefault(),
+                            "%d×%d → %d×%d pixels · EDSR (%s) · original preservado",
+                            out.originalWidth,out.originalHeight,out.outputWidth,out.outputHeight,
+                            out.gpu ? "GPU" : "CPU");
+                    status.setText("Ampliação concluída · "+out.outputWidth+"×"+out.outputHeight);
+                    showProcessed(original,out.uri,report);
+                });
+            } catch (Throwable error) {
+                android.util.Log.e("LumaSuperRes","EDSR processing failed",error);
+                runOnUiThread(() -> {
+                    localInProgress = false;
+                    if (destroyed) return;
+                    finishProcessing();
+                    String why = error instanceof OutOfMemoryError
+                            ? "Memória insuficiente. Tente o modo Equilibrado."
+                            : error.getMessage()==null ? "Falha no processamento EDSR" : error.getMessage();
+                    new AlertDialog.Builder(this).setTitle("Não foi possível ampliar")
+                            .setMessage(why+"\n\nSua foto original está preservada.")
+                            .setPositiveButton("Entendi",null).show();
+                });
+            }
+        });
     }
 
     /** CPU/GPU work runs on the worker; every result is a NEW MediaStore image. */
@@ -469,34 +563,25 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
             return;
         }
         localInProgress = true;
-        status.setText(portrait ? "IA local: criando retrato…" : "Processando cópia offline…");
+        showProcessing(0,portrait ? "Preparando retrato IA local" : "Preparando filtros offline");
         final int blur = settings.portraitBlur;
         files.execute(() -> {
             try {
                 LocalPhotoProcessor.Result result = LocalPhotoProcessor.process(
-                        getApplicationContext(), original, preset, portrait, blur, png);
+                        getApplicationContext(), original, preset, portrait, blur, png, this::showProcessing);
                 runOnUiThread(() -> {
-                    localInProgress = false;
+                    localInProgress=false;
                     if (destroyed) return;
+                    finishProcessing();
                     status.setText(result.details);
-                    if (original.equals(lastOriginalUri)) {
-                        lastUri = result.uri; lastVideo = false;
-                        files.execute(() -> {
-                            try {
-                                Bitmap thumb = getContentResolver().loadThumbnail(result.uri, new Size(150,150),null);
-                                runOnUiThread(() -> {
-                                    if (!destroyed && result.uri.equals(lastUri)) thumbnail.setImageBitmap(thumb);
-                                });
-                            } catch (Exception ignored) {}
-                        });
-                    }
-                    toast("Cópia local salva. O JPEG original foi preservado.");
+                    showProcessed(original,result.uri,result.details);
                 });
             } catch (Throwable error) {
                 android.util.Log.e("LumaLocal", "Local processing failed", error);
                 runOnUiThread(() -> {
                     localInProgress = false;
                     if (!destroyed) {
+                        finishProcessing();
                         String reason = error instanceof OutOfMemoryError
                                 ? "Memória insuficiente. Desative processamento automático em Ajustes."
                                 : "Falha no processamento local. Verifique o modelo e espaço disponível.";
@@ -696,7 +781,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox mirror = check(box, "Salvar selfie espelhada", settings.mirror);
 
         section(box, "IA LOCAL E REVISÃO (FUNCIONA SEM INTERNET)");
-        hint(box, "Modelo de segmentação de pessoas incluído no APK. A IA tenta usar GPU e recorre à CPU se necessário. Os filtros de cor/ruído/nitidez usam processamento determinístico, não IA generativa.");
+        hint(box, "Super-resolução EDSR ×4 offline aumenta pixels por rede neural (GPU/CPU). Retrato usa MediaPipe. Filtros de cor, ruído e nitidez não são super-resolução. A IA pode estimar detalhes que não estavam na foto.");
         String[] localNames = {"Desligado", "Natural (suave)", "Equilibrado", "Máximo"};
         Spinner localLevel = new Spinner(this);
         localLevel.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, localNames));
@@ -711,6 +796,9 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         box.addView(blurLevel,new LinearLayout.LayoutParams(-1,dp(52)));
         hint(box, "O original não é apagado. PNG preserva os pixels decodificados de JPEG, mas não recupera dados que já foram comprimidos. Retrato pode levar alguns segundos.");
         if (lastOriginalUri != null) {
+            Button superResLast = button("Aumentar resolução da última foto com IA ×4", "Executar super-resolução neural e visualizar resultado", v ->
+                    startSuperResolution(lastOriginalUri));
+            box.addView(superResLast,new LinearLayout.LayoutParams(-1,dp(62)));
             Button localLast = button("Melhorar última foto offline", "Processar original sem enviar ao Google", v ->
                     processLocal(lastOriginalUri,Math.max(1,settings.localPreset),false,false));
             Button portraitLast = button("Retrato IA da última foto", "Desfocar fundo via MediaPipe local", v ->
