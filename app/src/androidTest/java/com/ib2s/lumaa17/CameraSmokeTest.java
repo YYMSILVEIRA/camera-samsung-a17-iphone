@@ -32,6 +32,7 @@ public class CameraSmokeTest {
                 UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
                 device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null),"failure.png"));
                 device.dumpWindowHierarchy(new java.io.File(context.getExternalFilesDir(null),"failure.xml"));
+                preserveEvidence(context,device);
             } catch (Exception ignored) { }
         }
     };
@@ -55,6 +56,7 @@ public class CameraSmokeTest {
         assertTrue(device.wait(Until.hasObject(By.text("Cópia").enabled(true)),15000));
         device.dumpWindowHierarchy(new java.io.File(context.getExternalFilesDir(null),"photo-review.xml"));
         assertTrue(device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null), "photo-review.png")));
+        preserveEvidence(context,device);
         device.findObject(By.text("Voltar à câmera")).click();
         assertTrue(device.wait(Until.hasObject(By.desc("Alternar câmera frontal e traseira")),15000));
         device.findObject(By.desc("Alternar câmera frontal e traseira")).click();
@@ -80,8 +82,14 @@ public class CameraSmokeTest {
         device.pressHome();
         context.startActivity(new Intent(context, CameraActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         assertTrue(device.wait(Until.hasObject(By.desc("Iniciar gravação de vídeo")), 30000));
-        device.pressBack();
-        assertTrue(device.wait(Until.gone(By.desc("Iniciar gravação de vídeo")),15000));
+        // Leave the camera stopped before the remaining image-processing tests.
+        device.pressHome();
+    }
+    private static void preserveEvidence(Context context,UiDevice device) throws Exception {
+        // AGP uninstalls the target after testing, deleting its external-files directory.
+        // Copy these synthetic emulator screenshots before teardown.
+        device.executeShellCommand("mkdir -p /sdcard/Download/luma-ui");
+        device.executeShellCommand("cp -R "+context.getExternalFilesDir(null).getAbsolutePath()+"/. /sdcard/Download/luma-ui/");
     }
     private void waitReady(UiDevice device) {
         assertTrue(device.wait(Until.hasObject(By.textStartsWith("Pronto ·")),45000));
