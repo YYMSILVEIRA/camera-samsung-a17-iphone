@@ -35,7 +35,11 @@ import android.view.Surface;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.Spinner;
+import android.text.InputType;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -88,6 +92,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     private Uri lastUri;
     private boolean lastVideo, torchOn, updatingUi, destroyed, scaleActive;
     private String reportToSave;
+    private volatile boolean geminiInProgress;
     private float roll;
     private float touchFocusX = Float.NaN, touchFocusY = Float.NaN;
     private final ExecutorService files = Executors.newSingleThreadExecutor();
@@ -405,8 +410,67 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                 Bitmap bitmap = getContentResolver().loadThumbnail(uri, new Size(150,150), null);
                 runOnUiThread(() -> { if (!destroyed && uri.equals(lastUri)) thumbnail.setImageBitmap(bitmap); });
             } catch (Exception ignored) { /* A successful capture must not depend on its thumbnail. */ }
-        }); refresh();
+        });
+        if (!video && settings.geminiAutomatic) improvePhoto(uri, false);
+        refresh();
     }
+
+    /** Camera capture remains independent from optional cloud photo generation. */
+    private void improvePhoto(Uri original, boolean confirm) {
+        if (original == null || geminiInProgress) {
+            if (geminiInProgress) toast("Uma foto já está sendo processada pelo Gemini.");
+            return;
+        }
+        if (confirm) {
+            new AlertDialog.Builder(this).setTitle("Enviar foto ao Gemini?")
+                .setMessage("A foto será enviada ao Google para criar uma cópia editada. Ela pode ter detalhes alterados, custos de API e resolução diferente. O original continuará salvo.")
+                .setNegativeButton("Cancelar", null)
+                .setPositiveButton("Enviar e editar", (dialog, which) -> improvePhoto(original, false)).show();
+            return;
+        }
+        final String apiKey;
+        try { apiKey = GeminiKeyStore.load(this); }
+        catch (Exception ex) {
+            status.setText("Não foi possível ler a chave Gemini. Abra Ajustes para cadastrar uma nova.");
+            return;
+        }
+        if (apiKey.isEmpty()) {
+            status.setText("Configure sua API key Gemini em Ajustes para usar IA.");
+            return;
+        }
+        geminiInProgress = true;
+        status.setText("Gemini: criando cópia editada, sem alterar a foto original…");
+        int style = settings.geminiStyle;
+        files.execute(() -> {
+            try {
+                Uri edited = GeminiPhotoEnhancer.improve(getApplicationContext(), original, apiKey, style);
+                runOnUiThread(() -> {
+                    geminiInProgress = false;
+                    if (destroyed) return;
+                    lastUri = edited; lastVideo = false;
+                    status.setText("Cópia Gemini salva · original preservado");
+                    toast("Foto editada salva na galeria (pasta IA).");
+                    files.execute(() -> {
+                        try {
+                            Bitmap image = getContentResolver().loadThumbnail(edited, new Size(150, 150), null);
+                            runOnUiThread(() -> {
+                                if (!destroyed && edited.equals(lastUri)) thumbnail.setImageBitmap(image);
+                            });
+                        } catch (Exception ignored) {}
+                    });
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    geminiInProgress = false;
+                    if (!destroyed) {
+                        status.setText("Gemini: " + ex.getMessage() + " Foto original preservada.");
+                        toast("Não foi possível editar a foto. O original está salvo.");
+                    }
+                });
+            }
+        });
+    }
+
     @Override public void onRecording(boolean recording, boolean paused, long millis, long bytes) {
         if (destroyed) return;
         recordingLabel.setVisibility(recording ? View.VISIBLE : View.GONE);
@@ -464,35 +528,96 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
 
     private void showSettings() {
         if (!canChange()) return;
-        ScrollView scroll = new ScrollView(this); LinearLayout box = column(); box.setPadding(dp(22), dp(6), dp(22), dp(12)); scroll.addView(box);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout box = column();
+        box.setPadding(dp(22), dp(6), dp(22), dp(12));
+        scroll.addView(box);
         section(box, "FOTOGRAFIA");
-        CheckBox detail = check(box, "Maior resolução disponível", settings.detail);
-        hint(box, "Desativado: resolução próxima de 12 MP para equilibrar detalhe e velocidade. Ativado: maior JPEG exposto pelo aparelho; pode ficar mais lento.");
+        CheckBox detail = check(box, "Maior resolução real disponível", settings.detail);
+        hint(box, "Usa somente as resoluções disponibilizadas pelo Android. Fotos maiores levam mais tempo para processar.");
+        CheckBox jpeg = check(box, "JPEG com qualidade 100 (arquivos maiores)", settings.jpegMaximum);
+        hint(box, "Aumenta a qualidade de compressão JPEG de 97 para 100; não recupera detalhes perdidos pelo sensor.");
+        CheckBox hdr = check(box, "Ultra HDR JPEG, quando compatível", settings.ultraHdr);
+        hint(box, "JPEG/R com ganho HDR em telas e câmeras suportadas; caso contrário, JPEG padrão.");
         CheckBox mirror = check(box, "Salvar selfie espelhada", settings.mirror);
+
         section(box, "VÍDEO");
-        CheckBox high = check(box, "Taxa de bits alta", settings.highBitrate);
-        hint(box, "Full HD: alvo de 16 Mb/s no padrão ou 24 Mb/s em alta. Arquivos maiores; a taxa final depende do codificador.");
-        CheckBox hd = check(box, "Priorizar 720p", settings.videoHd);
+        CheckBox videoMax = check(box, "Maior resolução de vídeo disponível", settings.maximumVideoQuality);
+        hint(box, "Consulta as resoluções expostas por cada lente; o Galaxy A17 anuncia Full HD 30 fps, não 4K.");
+        CheckBox high = check(box, "Bitrate alto (Full HD: 24 Mb/s)", settings.highBitrate);
+        CheckBox ultra = check(box, "Bitrate máximo (Full HD: alvo 32 Mb/s)", settings.ultraBitrate);
+        hint(box, "Solicitações ao codificador; taxa e resultado final dependem do hardware. Desative o máximo se aquecer, travar ou gerar arquivos muito grandes.");
+        CheckBox hd = check(box, "Priorizar 720p (sobrepõe a maior resolução)", settings.videoHd);
         CheckBox audio = check(box, "Gravar áudio", settings.sound);
+
+        section(box, "GEMINI IA · OPÇÃO DE EDIÇÃO");
+        hint(box, "Gemini NÃO aumenta a capacidade do sensor nem otimiza vídeo em tempo real. Edita uma CÓPIA da foto após capturar; pode inventar detalhes ou mudar resolução. Precisa internet, chave do Google AI Studio, e pode gerar cobranças.");
+        EditText key = new EditText(this);
+        key.setSingleLine(true);
+        key.setHint("Cole sua API key do Google AI Studio");
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setTextSize(14);
+        box.addView(key, new LinearLayout.LayoutParams(-1, dp(54)));
+        try {
+            if (!GeminiKeyStore.load(this).isEmpty())
+                hint(box, "Uma chave já está armazenada criptografada neste aparelho. Deixe em branco para mantê-la.");
+        } catch (Exception ignored) {
+            hint(box, "A chave anterior não pôde ser lida. Cadastre uma nova.");
+        }
+        CheckBox erase = check(box, "Apagar chave Gemini armazenada", false);
+        CheckBox automatic = check(box, "Enviar cada nova foto automaticamente à IA", settings.geminiAutomatic);
+        hint(box, "DESATIVADO por padrão. Ao ativar, você autoriza o envio de cada foto ao Google. O original continua local; a cópia gerada vai para DCIM/LumaA17/IA.");
+        String[] styles = {"Natural / fiel ao original", "Leve nitidez e detalhes", "Baixa luz / sombras"};
+        Spinner style = new Spinner(this);
+        ArrayAdapter<String> options = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, styles);
+        style.setAdapter(options);
+        style.setSelection(settings.geminiStyle);
+        box.addView(style, new LinearLayout.LayoutParams(-1, dp(52)));
+        if (lastUri != null && !lastVideo) {
+            Button runGemini = button("Melhorar última foto com Gemini", "Enviar a última foto ao Google para gerar uma cópia editada", v -> {
+                improvePhoto(lastUri, true);
+            });
+            box.addView(runGemini, new LinearLayout.LayoutParams(-1, dp(55)));
+            hint(box, "Para alterar a chave ou o estilo, toque primeiro em Aplicar e depois reabra Ajustes.");
+        }
+
         section(box, "CAPTURA");
         CheckBox stabilization = check(box, "Estabilização disponível", settings.stabilization);
-        hint(box, "Prioriza OIS quando disponível. Vídeo usa estabilização eletrônica compatível nas outras lentes. Pode haver recorte.");
+        hint(box, "Prioriza OIS quando disponível; usa EIS compatível em lentes sem OIS.");
         CheckBox grid = check(box, "Grade de composição", settings.grid);
         CheckBox horizon = check(box, "Nível do horizonte", settings.level);
         section(box, "SOBRE ESTA VERSÃO");
-        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android nativo\nProjetado para o SM-A175F/DS. Sem root, anúncios, conta ou internet.\n\nA qualidade precisa ser comparada no aparelho. Não replica o processamento proprietário da Apple nem garante superar a câmera Samsung. HDR e Noite só aparecem se o fabricante liberar os modos para esta lente.");
+        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android sem root. Fotos JPEG e Ultra HDR compatível. HEIC/HEVC ainda não estão habilitados nesta versão: não é correto fingir que um JPEG/MP4 H.264 tenha outro codec. Gemini é opcional e não recebe vídeos.");
         Button diagnostics = button("Salvar diagnóstico de câmera", "Salvar capacidades disponíveis em arquivo", v -> saveDiagnostic());
-        box.addView(diagnostics); hint(box, "Registra modelo e recursos de câmera para ajustes futuros. Não inclui fotos, vídeos, localização ou número de série.");
-        new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll).setNegativeButton("Cancelar", null)
-                .setPositiveButton("Aplicar", (d,w) -> {
-                    boolean rebind = settings.detail != detail.isChecked() || settings.mirror != mirror.isChecked()
-                            || settings.highBitrate != high.isChecked() || settings.videoHd != hd.isChecked()
-                            || settings.stabilization != stabilization.isChecked();
-                    settings.detail = detail.isChecked(); settings.mirror = mirror.isChecked(); settings.highBitrate = high.isChecked();
-                    settings.videoHd = hd.isChecked(); settings.sound = audio.isChecked(); settings.stabilization = stabilization.isChecked();
-                    settings.grid = grid.isChecked(); settings.level = horizon.isChecked(); settings.save(preferences); applyOverlay();
-                    if (rebind) engine.bind(); else refresh();
-                }).show();
+        box.addView(diagnostics);
+        new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll)
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Aplicar", (d, w) -> {
+                try {
+                    if (erase.isChecked()) GeminiKeyStore.save(this, "");
+                    else if (!key.getText().toString().trim().isEmpty())
+                        GeminiKeyStore.save(this, key.getText().toString().trim());
+                } catch (Exception ex) {
+                    toast("Não foi possível salvar a chave Gemini; confira o Android Keystore.");
+                    return;
+                }
+                boolean rebind = settings.detail != detail.isChecked() || settings.mirror != mirror.isChecked()
+                    || settings.highBitrate != high.isChecked() || settings.videoHd != hd.isChecked()
+                    || settings.stabilization != stabilization.isChecked()
+                    || settings.jpegMaximum != jpeg.isChecked() || settings.ultraHdr != hdr.isChecked()
+                    || settings.maximumVideoQuality != videoMax.isChecked() || settings.ultraBitrate != ultra.isChecked();
+                settings.detail = detail.isChecked(); settings.mirror = mirror.isChecked();
+                settings.highBitrate = high.isChecked(); settings.ultraBitrate = ultra.isChecked();
+                settings.videoHd = hd.isChecked(); settings.maximumVideoQuality = videoMax.isChecked();
+                settings.jpegMaximum = jpeg.isChecked(); settings.ultraHdr = hdr.isChecked();
+                settings.sound = audio.isChecked(); settings.stabilization = stabilization.isChecked();
+                settings.geminiAutomatic = automatic.isChecked() && !erase.isChecked();
+                settings.geminiStyle = style.getSelectedItemPosition();
+                settings.grid = grid.isChecked(); settings.level = horizon.isChecked();
+                settings.save(preferences);
+                applyOverlay();
+                if (rebind) engine.bind(); else refresh();
+            }).show();
     }
 
     private void showControls() {
