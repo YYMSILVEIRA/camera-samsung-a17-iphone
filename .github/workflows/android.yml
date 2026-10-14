@@ -32,6 +32,17 @@ jobs:
             --output app/src/main/assets/selfie_segmenter.tflite
           test "$(stat -c %s app/src/main/assets/selfie_segmenter.tflite)" -gt 100000
           sha256sum app/src/main/assets/selfie_segmenter.tflite
+      - name: Bundle offline EDSR x4 model (Apache-2.0)
+        run: |
+          curl --fail --location --show-error --silent --retry 3 \
+            'https://huggingface.co/litert-community/EDSR-x4-LiteRT/resolve/main/edsr.tflite?download=true' \
+            --output app/src/main/assets/edsr.tflite
+          test "$(stat -c %s app/src/main/assets/edsr.tflite)" -gt 5000000
+          python3 - <<'PY'
+          with open('app/src/main/assets/edsr.tflite','rb') as f:
+              assert f.read(8)[4:8] == b'TFL3', 'EDSR asset is not a TFLite model'
+          PY
+          sha256sum app/src/main/assets/edsr.tflite
       - name: Test, lint and build
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
       - uses: actions/upload-artifact@v4
@@ -44,14 +55,14 @@ jobs:
       - name: Prepare downloadable APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.3.0-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.4.0-debug.apk
       - name: Publish APK in prerelease
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v1.3.0-debug >/dev/null 2>&1; then
-            gh release upload v1.3.0-debug Luma-A17-v1.3.0-debug.apk --clobber
+          if gh release view v1.4.0-debug >/dev/null 2>&1; then
+            gh release upload v1.4.0-debug Luma-A17-v1.4.0-debug.apk --clobber
           else
-            gh release create v1.3.0-debug Luma-A17-v1.3.0-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.3.0 · IA offline (APK teste)" --notes "Modelo local MediaPipe incluso; retrato offline GPU/CPU; JPEG original preservado; revisão pós-captura PNG/Gemini. Teste em SM-A175F. APK debug pode precisar desinstalar a versão anterior devido à assinatura diferente." --prerelease
+            gh release create v1.4.0-debug Luma-A17-v1.4.0-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.4.0 · IA offline (APK teste)" --notes "Modelo local MediaPipe incluso; retrato offline GPU/CPU; JPEG original preservado; revisão pós-captura PNG/Gemini. Teste em SM-A175F. APK debug pode precisar desinstalar a versão anterior devido à assinatura diferente." --prerelease
           fi

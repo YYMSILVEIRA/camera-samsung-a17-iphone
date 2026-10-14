@@ -4,6 +4,16 @@ Aplicativo Android nativo de câmera, voltado ao Samsung Galaxy A17 **SM-A175F/D
 
 Esta é uma primeira versão funcional para teste no aparelho. **Não há promessa de qualidade igual à de um iPhone ou superior à câmera Samsung.** Não foi feita calibração de imagem em um A17 físico. O processamento proprietário da Apple não é transferível, e fabricantes podem reservar recursos para seu próprio aplicativo. Megapixels sozinhos não determinam qualidade.
 
+## Luma A17 1.4.0 — super-resolução neural e comparação visível
+
+- **Novo EDSR x4 offline real**, com modelo [EDSR-x4-LiteRT](https://huggingface.co/litert-community/EDSR-x4-LiteRT), licença Apache-2.0. Aceleração pela GPU, com fallback CPU; inferência executada em blocos 128×128 (bordas sobrepostas) para limitar memória.
+- **Percentual de 0 a 100% no visor** para super-resolução: porcentagem vinculada ao número de blocos concluídos, seguida do salvamento. Os filtros leves e retrato exibem marcos por etapa, não porcentagem temporal exata.
+- **Exibição da imagem pronta dentro do aplicativo**, com botões Original e Processada, ampliação por gesto e ação para abrir na galeria. Permite comparar o resultado sem sair do Luma A17.
+- **Imagem original preservada**: super-resolução em `DCIM/LumaA17/SuperResolucao`. Não substituir a foto original por outra gerada neuralmente.
+- Limitação de RAM do A17: a entrada é ajustada até 1024 px (Equilibrado) ou 1536 px (Maior, se classe de memória permitir), depois ampliada ×4. Fotos de alta resolução poderão ser reduzidas ANTES da inferência. MAIS pixels no arquivo não significa recuperação garantida de detalhes reais; prefira original quando já tiver 12 MP e boa nitidez.
+- Foi removida a melhoria de tons como padrão para novas instalações; permanece opcional e separada da IA de super-resolução. Não é possível assumir sucesso na qualidade óptica sem comparar fotografias reais do A17 com o aplicativo Samsung.
+- HEIC continua como exportação separada a partir do JPEG; H.265 vídeo, fusão de sensores e RAW real continuam não implementados.
+
 ## Luma A17 1.3.0 · restauração do Work 1.2.0 + IA local
 
 - Restaurada a **maior resolução JPEG disponibilizada pelo A17**, preferida por padrão, inclusive para quem utilizava versões 1.1.x. O diagnóstico da lente principal mostra 4080×3060 no caminho de alta resolução, não 50 MP; o resultado real precisa ser confirmado no arquivo salvo. Perfil compatível CameraX pode reduzir resolução se o HAL rejeitar a configuração.

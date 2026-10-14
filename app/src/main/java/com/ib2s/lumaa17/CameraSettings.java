@@ -42,7 +42,7 @@ public final class CameraSettings {
         geminiStyle = Math.max(0, Math.min(2, p.getInt("geminiStyle", 0)));
         localPreset = Math.max(0, Math.min(3, p.getInt("localPreset", 1)));
         portraitBlur = Math.max(1, Math.min(2, p.getInt("portraitBlur", 1)));
-        localAutomatic = p.getBoolean("localAutomatic", true);
+        localAutomatic = p.getBoolean("localAutomatic", false);
         reviewAfterCapture = p.getBoolean("reviewAfterCapture", true);
         fullscreenPreview = p.getBoolean("fullscreenPreview", true);
         brighterExposure = p.getBoolean("brighterExposure", true);
