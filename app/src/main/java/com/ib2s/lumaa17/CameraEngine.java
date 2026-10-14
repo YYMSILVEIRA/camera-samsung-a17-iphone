@@ -322,8 +322,9 @@ public final class CameraEngine {
                 }
             });
             listener.onReady();
-            if (safe) listener.onNotice(attempt == 2 ? "Perfil compatível: resolução reduzida. Confira o diagnóstico."
-                    : "Foto em alta resolução com ajustes compatíveis.");
+            if (safe) listener.onNotice(settings.video ? "Vídeo no perfil compatível. Confira a resolução no visor."
+                    : attempt == 2 ? "Perfil compatível: resolução reduzida. Confira o diagnóstico."
+                    : "Foto com ajustes compatíveis. Confira a resolução no visor.");
             else if (settings.extension != ExtensionMode.NONE && !isExtension() && !settings.video)
                 listener.onNotice("Este modo não está disponível nesta lente. Usando Foto.");
         } catch (RuntimeException ex) {

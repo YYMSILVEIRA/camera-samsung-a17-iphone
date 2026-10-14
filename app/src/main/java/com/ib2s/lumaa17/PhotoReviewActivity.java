@@ -44,6 +44,7 @@ public final class PhotoReviewActivity extends ComponentActivity {
 
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WindowCompat.setDecorFitsSystemWindows(getWindow(),false);
         WindowCompat.getInsetsController(getWindow(),getWindow().getDecorView()).hide(WindowInsetsCompat.Type.systemBars());
         Uri source=getIntent().getData();if(source==null){finish();return;}

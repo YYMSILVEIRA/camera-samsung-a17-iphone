@@ -62,6 +62,8 @@ public class CameraSmokeTest {
         device.pressHome();
         context.startActivity(new Intent(context, CameraActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         assertTrue(device.wait(Until.hasObject(By.desc("Iniciar gravação de vídeo")), 30000));
+        device.pressBack();
+        assertTrue(device.wait(Until.gone(By.desc("Iniciar gravação de vídeo")),15000));
     }
     private void waitReady(UiDevice device) {
         assertTrue(device.wait(Until.hasObject(By.textStartsWith("Pronto ·")),45000));
