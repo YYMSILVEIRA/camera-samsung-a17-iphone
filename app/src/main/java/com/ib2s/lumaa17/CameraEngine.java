@@ -101,6 +101,7 @@ public final class CameraEngine {
     private int generation;
     private int boundExtension = ExtensionMode.NONE;
     private boolean conservative;
+    private int resolutionFallbackStage;
     private long lastTelemetry;
     private long durationMillis, recordingBytes;
     private int rotation = Surface.ROTATION_0;
@@ -201,10 +202,12 @@ public final class CameraEngine {
         exposurePending = false; lowLightRequested = false; lowLightRejected = false; torchRequested = false;
         lastMeterSample = null;
         int token = ++generation;
-        tryBind(token, false);
+        tryBind(token, 0);
     }
 
-    private void tryBind(int token, boolean safe) {
+    private void tryBind(int token, int attempt) {
+        boolean safe = attempt > 0;
+        resolutionFallbackStage = attempt;
         if (closed || token != generation) return;
         provider.unbindAll();
         conservative = safe;
@@ -289,9 +292,10 @@ public final class CameraEngine {
                         }
                     } catch (RuntimeException ex) { Log.w("Luma", "Ultra HDR capability unavailable", ex); }
                 }
-                if (!isExtension() && !safe) {
+                if (!isExtension() && attempt < 2) {
                     ResolutionSelector.Builder resolution = new ResolutionSelector.Builder()
-                            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY);
+                            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                            .setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE);
                     if (settings.detail) {
                         resolution.setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
                                 .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY);
@@ -318,12 +322,13 @@ public final class CameraEngine {
                 }
             });
             listener.onReady();
-            if (safe) listener.onNotice("Perfil compatível ativado; alguns ajustes avançados ficaram indisponíveis.");
+            if (safe) listener.onNotice(attempt == 2 ? "Perfil compatível: resolução reduzida. Confira o diagnóstico."
+                    : "Foto em alta resolução com ajustes compatíveis.");
             else if (settings.extension != ExtensionMode.NONE && !isExtension() && !settings.video)
                 listener.onNotice("Este modo não está disponível nesta lente. Usando Foto.");
         } catch (RuntimeException ex) {
             Log.w("Luma", "Bind failed. Compatible=" + safe, ex);
-            if (!safe) { handler.post(() -> tryBind(token, true)); }
+            if (attempt < 2) { handler.post(() -> tryBind(token, attempt + 1)); }
             else {
                 camera = null; imageCapture = null; videoCapture = null;
                 setBusy(false); fail("Não foi possível iniciar esta câmera. Tente outra lente ou toque em Tentar novamente.", ex);
@@ -595,7 +600,7 @@ public final class CameraEngine {
                 .put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL)
                 .put("android", Build.VERSION.RELEASE).put("sdk", Build.VERSION.SDK_INT)
                 .put("cameraX", "1.5.3").put("currentSession", sessionDescription())
-                .put("compatibleFallback", conservative).put("extensionMode", boundExtension)
+                .put("compatibleFallback", conservative).put("resolutionFallbackStage", resolutionFallbackStage).put("extensionMode", boundExtension)
                 .put("targetFpsRange", String.valueOf(sessionFps)).put("ultraHdr", ultraHdrActive)
                 .put("lowLightBoostRequested", lowLightRequested).put("lowLightBoostRejected", lowLightRejected)
                 .put("smartExposure", isAutoExposure()).put("appliedExposureEv", appliedEv)
@@ -610,8 +615,19 @@ public final class CameraEngine {
                 info.put("hdrExtension", extensions != null && extensions.isExtensionAvailable(item.selector(), ExtensionMode.HDR));
                 info.put("nightExtension", extensions != null && extensions.isExtensionAvailable(item.selector(), ExtensionMode.NIGHT));
                 info.put("autoExtension", extensions != null && extensions.isExtensionAvailable(item.selector(), ExtensionMode.AUTO));
-            } catch (RuntimeException ignored) { info.put("extensionQueryFailed", true); }
+                info.put("bokehExtension", extensions != null && extensions.isExtensionAvailable(item.selector(), ExtensionMode.BOKEH));
+                info.put("outputFormats", new JSONArray(ImageCapture.getImageCaptureCapabilities(item.info).getSupportedOutputFormats()));
+                android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
+                info.put("physicalCameraIds", new JSONArray(cm.getCameraCharacteristics(item.id).getPhysicalCameraIds()));
+            } catch (Exception ignored) { info.put("extensionQueryFailed", true); }
             cameras.put(info);
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
+            JSONArray groups = new JSONArray();
+            try { for (java.util.Set<String> group : cm.getConcurrentCameraIds()) groups.put(new JSONArray(group)); }
+            catch (Exception ignored) { out.put("concurrentQueryFailed", true); }
+            out.put("concurrentCameraGroups", groups);
         }
         return out.put("cameras", cameras).toString(2);
     }

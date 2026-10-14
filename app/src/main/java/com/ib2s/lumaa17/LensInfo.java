@@ -70,18 +70,16 @@ public final class LensInfo {
     }
     public Size balancedPhotoSize() {
         StreamConfigurationMap map = get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-        Size chosen = new Size(4000, 3000);
-        double best = Double.MAX_VALUE;
-        if (map != null && map.getOutputSizes(ImageFormat.JPEG) != null) {
-            for (Size size : map.getOutputSizes(ImageFormat.JPEG)) {
-                long pixels = (long)size.getWidth() * size.getHeight();
-                double aspect = (double)Math.max(size.getWidth(),size.getHeight()) / Math.min(size.getWidth(),size.getHeight());
-                if (pixels > 16_000_000 || Math.abs(aspect - 4.0/3) > 0.04) continue;
-                double score = Math.abs(Math.log(pixels / 12_000_000.0));
-                if (score < best) { best = score; chosen = size; }
-            }
-        }
-        return chosen;
+        if (map == null) return new Size(4000, 3000);
+        int[] result = PhotoResolutionPolicy.balanced(dimensions(map.getOutputSizes(ImageFormat.JPEG)),
+                dimensions(map.getHighResolutionOutputSizes(ImageFormat.JPEG)));
+        return new Size(result[0], result[1]);
+    }
+    private static int[][] dimensions(Size[] sizes) {
+        if (sizes == null) return new int[0][];
+        int[][] result = new int[sizes.length][2];
+        for (int i = 0; i < sizes.length; i++) result[i] = new int[]{sizes[i].getWidth(), sizes[i].getHeight()};
+        return result;
     }
     public CameraSelector selector() {
         return new CameraSelector.Builder().addCameraFilter(cameras -> {
@@ -105,7 +103,12 @@ public final class LensInfo {
                 .put("hardwareLevel", get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL))
                 .put("isoRange", String.valueOf(isoRange)).put("exposureTimeRangeNs", String.valueOf(shutterRange))
                 .put("aeLock", aeLock).put("awbLock", awbLock)
-                .put("lowLightBoostSupported", info.isLowLightBoostSupported());
+                .put("lowLightBoostSupported", info.isLowLightBoostSupported())
+                .put("rawSensor", has(get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES),
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW))
+                .put("logicalMultiCamera", has(get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES),
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA))
+                .put("balancedPhotoTarget", balancedPhotoSize().toString());
         JSONArray sizes = new JSONArray();
         StreamConfigurationMap map = get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
         if (map != null) {

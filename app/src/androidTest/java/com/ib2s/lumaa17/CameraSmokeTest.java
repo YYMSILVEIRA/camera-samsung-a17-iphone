@@ -30,6 +30,15 @@ public class CameraSmokeTest {
         context.startActivity(new Intent(context, CameraActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
         waitReady(device);
         capturePhoto(device, context);
+        assertTrue(device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null), "camera-fullscreen.png")));
+        device.findObject(By.desc("Abrir a última foto ou vídeo")).click();
+        assertTrue(device.wait(Until.hasObject(By.text("PNG")),15000));
+        device.findObject(By.text("PNG")).click();
+        device.findObject(By.text("Salvar PNG")).click();
+        assertTrue(device.wait(Until.hasObject(By.text("PNG SDR salvo · mesma resolução do original")),45000));
+        assertTrue(device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null), "photo-review.png")));
+        device.findObject(By.text("Voltar à câmera")).click();
+        assertTrue(device.wait(Until.hasObject(By.desc("Alternar câmera frontal e traseira")),15000));
         device.findObject(By.desc("Alternar câmera frontal e traseira")).click();
         assertTrue(device.wait(Until.hasObject(By.text("Pronto · Frontal")), 45000));
         capturePhoto(device, context);

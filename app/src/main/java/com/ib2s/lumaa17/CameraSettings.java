@@ -11,6 +11,8 @@ public final class CameraSettings {
     public int extension = ExtensionMode.AUTO;
     public boolean smartExposure = true, lowLight = true, ultraHdr = true, stableVideo;
     public boolean userExposureOverride;
+    public boolean portrait, fullscreen;
+    public int portraitStrength;
     public int timerSeconds, flash = ImageCapture.FLASH_MODE_OFF;
     public int whiteBalance = CaptureRequest.CONTROL_AWB_MODE_AUTO;
     public int antibanding = CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_60HZ;
@@ -22,6 +24,8 @@ public final class CameraSettings {
 
     public CameraSettings(SharedPreferences p) {
         detail = p.getBoolean("detail", false);
+        fullscreen = p.getBoolean("fullscreen", true);
+        portraitStrength = Math.max(1, Math.min(10, p.getInt("portraitStrength", 5)));
         // The brighter profile upgrades the old default bitrate once, then respects user choices.
         highBitrate = p.getInt("qualityProfile", 0) < 2 || p.getBoolean("bitrate", true);
         smartExposure = p.getBoolean("smartExposure", true);
@@ -40,6 +44,7 @@ public final class CameraSettings {
 
     public void save(SharedPreferences p) {
         p.edit().putBoolean("detail", detail).putBoolean("bitrate", highBitrate)
+                .putBoolean("fullscreen", fullscreen).putInt("portraitStrength", portraitStrength)
                 .putBoolean("mirror", mirror).putBoolean("grid", grid)
                 .putBoolean("level", level).putBoolean("sound", sound)
                 .putBoolean("stabilization", stabilization).putInt("antibanding", antibanding)

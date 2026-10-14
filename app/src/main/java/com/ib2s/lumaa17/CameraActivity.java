@@ -59,6 +59,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -75,7 +76,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     private PreviewView preview;
     private CameraOverlay overlay;
     private PreviewFrame previewFrame;
-    private LinearLayout root, modes, tools;
+    private FrameLayout root;
+    private LinearLayout modes, tools;
     private TextView session, status, telemetry, evLabel, zoomLabel, recordingLabel;
     private Button flashButton, timerButton, lensButton, switchButton, settingsButton, proButton, unlockButton, retryButton, pauseButton;
     private SeekBar evBar;
@@ -85,7 +87,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     private OrientationEventListener orientation;
     private SensorManager sensorManager;
     private Sensor gravitySensor;
-    private Uri lastUri;
+    private Uri lastUri, lastOriginalUri;
+    private ActivityResultLauncher<Intent> photoReview;
     private boolean lastVideo, torchOn, updatingUi, destroyed, scaleActive;
     private String reportToSave;
     private float roll;
@@ -126,6 +129,12 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
 
     private void registerResults() {
+        photoReview = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() == RESULT_OK && result.getData() != null && result.getData().getData() != null) {
+                updateThumbnail(result.getData().getData(), false);
+                status.setText("Cópia salva na galeria · original preservado");
+            }
+        });
         cameraPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
             if (granted) { retryButton.setVisibility(View.GONE); engine.initialize(); }
             else {
@@ -155,11 +164,17 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
 
     private void buildUi() {
-        root = column(); root.setBackgroundColor(BG); root.setPadding(dp(14), 0, dp(14), 0);
-        setContentView(root);
-        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+        root = new FrameLayout(this); root.setBackgroundColor(Color.BLACK); setContentView(root);
+        LinearLayout topUi = column(), bottomUi = column();
+        topUi.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xdd000000,0x22000000}));
+        bottomUi.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0x22000000,0xdd000000}));
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(getWindow(),getWindow().getDecorView());
+        controller.hide(WindowInsetsCompat.Type.systemBars());
+        controller.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v,insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-            root.setPadding(dp(14) + bars.left, bars.top, dp(14) + bars.right, bars.bottom + dp(4));
+            topUi.setPadding(dp(12)+bars.left,bars.top,dp(12)+bars.right,0);
+            bottomUi.setPadding(dp(12)+bars.left,0,dp(12)+bars.right,dp(4)+bars.bottom);
             return insets;
         });
         LinearLayout header = row();
@@ -167,33 +182,30 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         header.addView(brand, new LinearLayout.LayoutParams(0, dp(50), 1));
         TextView model = text("A17", 12, GOLD); model.setLetterSpacing(.12f); header.addView(model, new LinearLayout.LayoutParams(dp(48), dp(50)));
         settingsButton = button("Ajustes", "Abrir ajustes da câmera", v -> showSettings());
-        header.addView(settingsButton, new LinearLayout.LayoutParams(dp(88), dp(48))); root.addView(header);
+        header.addView(settingsButton, new LinearLayout.LayoutParams(dp(88), dp(48))); topUi.addView(header);
 
         LinearLayout top = row();
         flashButton = button("Flash off", "Mudar flash", v -> changeFlash());
         timerButton = button("Timer off", "Mudar temporizador", v -> changeTimer());
         proButton = button("Controles", "Exposição, cores e foco", v -> showControls());
         top.addView(flashButton, weighted(dp(48))); top.addView(timerButton, weighted(dp(48))); top.addView(proButton, weighted(dp(48)));
-        root.addView(top);
+        topUi.addView(top);
 
         session = text("Preparando câmera…", 11, MUTED); session.setGravity(Gravity.CENTER); session.setMaxLines(1);
         previewFrame = new PreviewFrame();
         preview = new PreviewView(this); preview.setImplementationMode(PreviewView.ImplementationMode.PERFORMANCE);
-        preview.setScaleType(PreviewView.ScaleType.FIT_CENTER);
+        preview.setScaleType(settings.fullscreen ? PreviewView.ScaleType.FILL_CENTER : PreviewView.ScaleType.FIT_CENTER);
         preview.setContentDescription("Visor da câmera. Toque para foco e exposição; mantenha pressionado para travar; use dois dedos para zoom.");
         overlay = new CameraOverlay(this); applyOverlay();
         previewFrame.addView(preview); previewFrame.addView(overlay);
-        FrameLayout hud = new FrameLayout(this);
-        session.setBackgroundColor(0x88000000);
-        hud.addView(session, new FrameLayout.LayoutParams(-1, dp(26), Gravity.TOP));
-        LinearLayout lowerHud = column(); lowerHud.setPadding(dp(8),0,dp(8),0); lowerHud.setBackgroundColor(0x88000000);
-        hud.addView(lowerHud,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));
-        previewFrame.addView(hud);
-        root.addView(previewFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+        session.setBackgroundColor(0x66000000); topUi.addView(session,new LinearLayout.LayoutParams(-1,dp(24)));
+        LinearLayout lowerHud = column();
+        root.addView(previewFrame,new FrameLayout.LayoutParams(-1,-1));
+        bottomUi.addView(lowerHud);
 
         recordingLabel = text("", 14, 0xFFFF6B6B); recordingLabel.setGravity(Gravity.CENTER);
         recordingLabel.setTypeface(Typeface.MONOSPACE); recordingLabel.setVisibility(View.GONE);
-        root.addView(recordingLabel, new LinearLayout.LayoutParams(-1, dp(26)));
+        bottomUi.addView(recordingLabel, new LinearLayout.LayoutParams(-1, dp(26)));
         LinearLayout info = row();
         telemetry = text("Toque para foco e exposição", 11, MUTED); info.addView(telemetry, new LinearLayout.LayoutParams(0, dp(30), 1));
         unlockButton = button("Destravar", "Destravar foco e exposição", v -> {
@@ -223,7 +235,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         exposure.addView(evLabel, new LinearLayout.LayoutParams(dp(65), dp(38)));
         evBar = new SeekBar(this); evBar.setContentDescription("Clarear ou escurecer a imagem");
         evBar.setProgressTintList(ColorStateList.valueOf(GOLD)); evBar.setThumbTintList(ColorStateList.valueOf(GOLD));
-        exposure.addView(evBar, new LinearLayout.LayoutParams(0, dp(38), 1)); root.addView(exposure);
+        exposure.addView(evBar, new LinearLayout.LayoutParams(0, dp(38), 1)); bottomUi.addView(exposure);
         evBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean user) {
                 if (!user || updatingUi || !available()) return;
@@ -237,7 +249,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
 
         HorizontalScrollView modeScroll = new HorizontalScrollView(this); modeScroll.setHorizontalScrollBarEnabled(false);
         modeScroll.setFillViewport(true); modes = row(); modes.setGravity(Gravity.CENTER);
-        modeScroll.addView(modes, new FrameLayout.LayoutParams(-1, dp(48))); root.addView(modeScroll);
+        modeScroll.addView(modes, new FrameLayout.LayoutParams(-1, dp(48))); bottomUi.addView(modeScroll);
 
         LinearLayout captureRow = row(); captureRow.setGravity(Gravity.CENTER);
         thumbnail = new ImageView(this); thumbnail.setContentDescription("Abrir a última foto ou vídeo");
@@ -249,12 +261,14 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         shutter = new ShutterView(); shutter.setOnClickListener(v -> capture());
         captureRow.addView(shutter, new LinearLayout.LayoutParams(dp(92), dp(92)));
         switchButton = button("↻", "Alternar câmera frontal e traseira", v -> flipCamera()); switchButton.setTextSize(32);
-        captureRow.addView(switchButton, weighted(dp(92))); root.addView(captureRow);
+        captureRow.addView(switchButton, weighted(dp(92))); bottomUi.addView(captureRow);
         status = text("", 11, MUTED); status.setGravity(Gravity.CENTER); status.setMaxLines(2);
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        root.addView(status, new LinearLayout.LayoutParams(-1, dp(32)));
+        bottomUi.addView(status, new LinearLayout.LayoutParams(-1, dp(32)));
         retryButton = button("Tentar novamente", "Tentar abrir a câmera novamente", v -> retryCamera());
-        retryButton.setVisibility(View.GONE); root.addView(retryButton, new LinearLayout.LayoutParams(-1, dp(48)));
+        retryButton.setVisibility(View.GONE); bottomUi.addView(retryButton, new LinearLayout.LayoutParams(-1, dp(48)));
+        root.addView(topUi,new FrameLayout.LayoutParams(-1,-2,Gravity.TOP));
+        root.addView(bottomUi,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));
         renderModes();
     }
 
@@ -324,7 +338,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
     private void switchMode(boolean video, int extension) {
         if (!available() || engine.isRecording() || timer != null) return;
-        settings.video = video; settings.extension = extension; settings.manualExposure = false;
+        settings.video = video; settings.portrait = false; settings.extension = extension; settings.manualExposure = false;
         settings.focusDistance = -1; settings.lock = false; torchOn = false;
         settings.userExposureOverride = false; settings.ev = 0;
         overlay.locked = false; overlay.invalidate();
@@ -335,15 +349,25 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         modes.removeAllViews();
         if (engine != null && engine.extensionAvailable(ExtensionMode.AUTO)) modeButton("AUTO", false, ExtensionMode.AUTO);
         modeButton("FOTO", false, ExtensionMode.NONE);
+        Button portrait = button("RETRATO", "Modo RETRATO", v -> {
+            if (!canChange()) return;
+            settings.portrait = true; settings.video = false; settings.extension = ExtensionMode.NONE;
+            settings.manualExposure = false; settings.lock = false; settings.focusDistance = -1;
+            settings.userExposureOverride = false; settings.ev = 0; torchOn = false;
+            engine.bind(); renderModes();
+        });
+        portrait.setTextColor(settings.portrait ? GOLD : MUTED);
+        portrait.setBackground(pill(settings.portrait ? PANEL : 0x55000000,20));
+        modes.addView(portrait,new LinearLayout.LayoutParams(dp(92),dp(46)));
         modeButton("VÍDEO", true, ExtensionMode.NONE);
         if (engine != null && engine.extensionAvailable(ExtensionMode.HDR)) modeButton("HDR", false, ExtensionMode.HDR);
         if (engine != null && engine.extensionAvailable(ExtensionMode.NIGHT)) modeButton("NOITE", false, ExtensionMode.NIGHT);
     }
     private void modeButton(String name, boolean video, int extension) {
         Button b = button(name, "Modo " + name, v -> switchMode(video, extension));
-        boolean selected = settings.video == video && (video || settings.extension == extension);
+        boolean selected = !settings.portrait && settings.video == video && (video || settings.extension == extension);
         b.setTextColor(selected ? GOLD : MUTED); b.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
-        b.setBackground(pill(selected ? PANEL : BG, 20));
+        b.setBackground(pill(selected ? PANEL : 0x55000000, 20));
         b.setEnabled(engine == null || (!engine.isBusy() && !engine.isRecording() && timer == null));
         modes.addView(b, new LinearLayout.LayoutParams(dp(80), dp(46)));
     }
@@ -383,6 +407,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     @Override public void onReady() {
         if (destroyed) return;
         retryButton.setVisibility(View.GONE); status.setText("Pronto · " + engine.lens.name);
+        if (settings.portrait) toast("Retrato de pessoas · desfoque aplicado após a foto");
         engine.camera.getCameraInfo().getZoomState().removeObservers(this);
         engine.camera.getCameraInfo().getZoomState().observe(this, value -> {
             if (value != null) zoomLabel.setText(String.format(Locale.getDefault(), "%.1f×", value.getZoomRatio()));
@@ -403,15 +428,26 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     @Override public void onExposureChanged() { if (!destroyed) refresh(); }
     @Override public void onSaved(Uri uri, boolean video) {
         if (destroyed) return;
-        lastUri = uri; lastVideo = video;
+        if (!video) lastOriginalUri = uri;
+        updateThumbnail(uri, video);
         status.setText(video ? "Vídeo salvo na galeria" : "Foto salva na galeria");
         shutter.performHapticFeedback(android.os.Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.KEYBOARD_TAP);
+        if (!video && settings.portrait) openReview(uri,true);
+        refresh();
+    }
+    private void updateThumbnail(Uri uri,boolean video) {
+        lastUri = uri; lastVideo = video;
         files.execute(() -> {
             try {
-                Bitmap bitmap = getContentResolver().loadThumbnail(uri, new Size(150,150), null);
-                runOnUiThread(() -> { if (!destroyed && uri.equals(lastUri)) thumbnail.setImageBitmap(bitmap); });
-            } catch (Exception ignored) { /* A successful capture must not depend on its thumbnail. */ }
-        }); refresh();
+                Bitmap bitmap = getContentResolver().loadThumbnail(uri,new Size(150,150),null);
+                runOnUiThread(() -> { if (!destroyed && uri.equals(lastUri)) thumbnail.setImageBitmap(bitmap); else bitmap.recycle(); });
+            } catch (Exception ignored) { }
+        });
+    }
+    private void openReview(Uri uri,boolean portrait) {
+        if (uri == null || engine.isRecording() || engine.isBusy()) return;
+        photoReview.launch(new Intent(this,PhotoReviewActivity.class).setData(uri)
+                .putExtra("portrait",portrait).putExtra("strength",settings.portraitStrength));
     }
     @Override public void onRecording(boolean recording, boolean paused, long millis, long bytes) {
         if (destroyed) return;
@@ -439,7 +475,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         unlockButton.setVisibility(settings.lock ? View.VISIBLE : View.GONE);
         if (engine.lens != null) lensButton.setText(engine.lens.name);
         if (active) {
-            session.setText(engine.sessionDescription());
+            session.setText(engine.sessionDescription() + (settings.fullscreen ? " · visor ampliado" : " · quadro inteiro"));
             ExposureState e = engine.camera.getCameraInfo().getExposureState();
             evBar.setMax(e.getExposureCompensationRange().getUpper() - e.getExposureCompensationRange().getLower());
             evBar.setProgress(CapturePolicy.exposureIndex(engine.exposureEv(), e.getExposureCompensationStep().doubleValue(),
@@ -448,6 +484,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         } else evBar.setEnabled(false);
         evLabel.setText(settings.manualExposure ? "MANUAL" : String.format(Locale.getDefault(), "%s %+.1f", engine.isAutoExposure() ? "Auto" : "EV", engine.exposureEv()));
         for (int i=0;i<modes.getChildCount();i++) modes.getChildAt(i).setEnabled(mutable);
+        preview.setScaleType(settings.fullscreen ? PreviewView.ScaleType.FILL_CENTER : PreviewView.ScaleType.FIT_CENTER);
+        previewFrame.requestLayout();
         if (previewFrame.video != settings.video) { previewFrame.video = settings.video; previewFrame.requestLayout(); }
         overlay.locked = settings.lock; overlay.invalidate();
         updatingUi = false;
@@ -464,7 +502,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
     private void openLast() {
         if (lastUri == null) { toast("Suas capturas aparecerão aqui e na galeria."); return; }
-        try { startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(lastUri, lastVideo ? "video/mp4" : "image/jpeg").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)); }
+        if (!lastVideo) { openReview(lastOriginalUri == null ? lastUri : lastOriginalUri,false); return; }
+        try { startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(lastUri,"video/mp4").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)); }
         catch (ActivityNotFoundException ex) { toast("Abra a galeria para ver sua captura."); }
     }
 
@@ -475,8 +514,17 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox hdr = check(box, "Ultra HDR quando disponível", settings.ultraHdr);
         hint(box, "Preserva uma faixa maior de brilho nas fotos quando esta lente oferece suporte. JPEG com qualidade máxima; a galeria precisa ser compatível para exibir HDR.");
         CheckBox detail = check(box, "Maior resolução disponível", settings.detail);
-        hint(box, "Desativado: resolução próxima de 12 MP para equilibrar detalhe e velocidade. Ativado: maior JPEG exposto pelo aparelho; pode ficar mais lento.");
+        hint(box, "Desativado: próximo de 12 MP, incluindo os tamanhos de alta resolução liberados pelo aparelho. Ativado: maior JPEG disponível. A captura pode ser mais lenta; a resolução ativa aparece no visor.");
         CheckBox mirror = check(box, "Salvar selfie espelhada", settings.mirror);
+        hint(box,"O JPEG original usa qualidade 100%. Toque na miniatura para criar um PNG SDR sem perdas, um retrato ou uma cópia Gemini. Converter em PNG não recupera informação do sensor nem o ganho HDR.");
+        section(box,"VISOR E RETRATO");
+        CheckBox fullscreen = check(box,"Visor em tela cheia",settings.fullscreen);
+        hint(box,"Amplia a prévia para preencher a tela. A foto salva conserva o quadro completo 4:3 e o vídeo conserva 16:9. Desative para conferir todo o enquadramento antes da captura.");
+        TextView blurLabel = text("Intensidade do desfoque de retrato",13,GOLD);box.addView(blurLabel);
+        SeekBar blur = new SeekBar(this);blur.setContentDescription("Intensidade do retrato");blur.setMax(9);blur.setProgress(settings.portraitStrength-1);box.addView(blur);
+        hint(box,"IA de pessoas executada no aparelho após a foto. Salva uma cópia PNG na resolução original. Cabelo e transparências podem apresentar erros de recorte.");
+        Button gemini = button("Configurar Gemini", "Configurar chave de API do Gemini",v -> GeminiSettingsDialog.show(this));box.addView(gemini);
+        hint(box,"Melhoria opcional após a captura, com envio de uma foto por vez ao Google. Não é filtro de vídeo em tempo real; pode ter custo e modificar detalhes.");
         section(box, "VÍDEO");
         CheckBox high = check(box, "Taxa de bits alta", settings.highBitrate);
         hint(box, "Full HD: alvo de 16 Mb/s no padrão ou 24 Mb/s em alta. Arquivos maiores; a taxa final depende do codificador.");
@@ -494,7 +542,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox grid = check(box, "Grade de composição", settings.grid);
         CheckBox horizon = check(box, "Nível do horizonte", settings.level);
         section(box, "SOBRE ESTA VERSÃO");
-        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android nativo\nProjetado para o SM-A175F/DS. Sem root, anúncios, conta ou internet.\n\nPerfil de luz adaptativo para frontal e traseira. AUTO, HDR, Noite e Ultra HDR dependem dos recursos que o fabricante liberar. A comparação final de qualidade deve ser feita no aparelho.");
+        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android nativo\nProjetado para o SM-A175F/DS. Captura e retrato funcionam sem internet; Gemini é opcional e usa uma chave pessoal.\n\nPerfil de luz adaptativo para frontal e traseira. AUTO, HDR, Noite e Ultra HDR dependem dos recursos que o fabricante liberar. A comparação final de qualidade deve ser feita no aparelho.");
         Button diagnostics = button("Salvar diagnóstico de câmera", "Salvar capacidades disponíveis em arquivo", v -> saveDiagnostic());
         box.addView(diagnostics); hint(box, "Registra modelo e recursos de câmera para ajustes futuros. Não inclui fotos, vídeos, localização ou número de série.");
         new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll).setNegativeButton("Cancelar", null)
@@ -507,6 +555,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                     settings.videoHd = hd.isChecked(); settings.sound = audio.isChecked(); settings.stabilization = stabilization.isChecked();
                     settings.stableVideo = stable.isChecked(); settings.ultraHdr = hdr.isChecked();
                     settings.lowLight = lowLight.isChecked(); settings.smartExposure = smart.isChecked();
+                    settings.fullscreen = fullscreen.isChecked(); settings.portraitStrength = blur.getProgress()+1;
                     settings.grid = grid.isChecked(); settings.level = horizon.isChecked(); settings.save(preferences); applyOverlay();
                     if (rebind) engine.bind(); else { engine.applyControls(); refresh(); }
                 }).show();
@@ -637,7 +686,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         Button button = new Button(this); button.setText(value); button.setTextSize(12); button.setAllCaps(false);
         button.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{0xFF64676E,Color.WHITE}));
         button.setMinWidth(0); button.setMinimumWidth(0); button.setMinHeight(dp(48)); button.setMinimumHeight(dp(48));
-        button.setPadding(dp(6),0,dp(6),0); button.setBackground(pill(BG,18)); button.setContentDescription(description); button.setOnClickListener(click);
+        button.setPadding(dp(6),0,dp(6),0); button.setBackground(pill(0x55000000,18)); button.setContentDescription(description); button.setOnClickListener(click);
         return button;
     }
     private GradientDrawable pill(int color,float radius) { GradientDrawable bg = new GradientDrawable(); bg.setColor(color); bg.setCornerRadius(dp(radius)); return bg; }
@@ -646,16 +695,17 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     private void hint(LinearLayout box,String value) { TextView label = text(value,12,MUTED); label.setPadding(0,0,0,dp(8)); label.setLineSpacing(dp(2),1); box.addView(label); }
     private void toast(String text) { if (!destroyed) Toast.makeText(this,text,Toast.LENGTH_SHORT).show(); }
 
-    /** Fit the entire photo/video field of view; composition overlay follows that exact rectangle. */
+    /** Immersive preview, or an explicit whole-frame view. Capture resolution is never cropped to the display. */
     private final class PreviewFrame extends FrameLayout {
         boolean video;
         private int childWidth,childHeight;
-        PreviewFrame() { super(CameraActivity.this); setBackground(pill(Color.BLACK,16)); setClipToOutline(true); }
+        PreviewFrame() { super(CameraActivity.this); setBackgroundColor(Color.BLACK); }
         @Override protected void onMeasure(int ws,int hs) {
             int width = MeasureSpec.getSize(ws), height = MeasureSpec.getSize(hs);
             double ratio = video ? 9.0/16 : 3.0/4;
             childWidth = width; childHeight = (int)Math.round(width/ratio);
             if (childHeight>height) { childHeight=height; childWidth=(int)Math.round(height*ratio); }
+            if (settings.fullscreen) { childWidth=width; childHeight=height; }
             for (int i=0;i<getChildCount();i++) getChildAt(i).measure(MeasureSpec.makeMeasureSpec(i<2?childWidth:width,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(i<2?childHeight:height,MeasureSpec.EXACTLY));
             setMeasuredDimension(width,height);
         }

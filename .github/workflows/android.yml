@@ -67,7 +67,9 @@ jobs:
           profile: pixel_2
           disable-animations: true
           emulator-options: -no-window -no-snapshot -no-boot-anim -noaudio -gpu swiftshader_indirect -camera-back emulated -camera-front emulated
-          script: ./gradlew --no-daemon :app:connectedDebugAndroidTest
+          script: |
+            ./gradlew --no-daemon :app:connectedDebugAndroidTest
+            adb pull /sdcard/Android/data/com.ib2s.lumaa17.debug/files app/build/reports/androidTests/connected/ui
       - uses: actions/upload-artifact@v4
         if: always()
         with:

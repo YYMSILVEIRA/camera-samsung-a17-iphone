@@ -1,8 +1,21 @@
 # Luma A17
 
-Aplicativo Android nativo de câmera, voltado ao Samsung Galaxy A17 **SM-A175F/DS** (4G), sem root. Interface em português, fotos JPEG e vídeo MP4 salvos em `DCIM/LumaA17`.
+Aplicativo Android nativo de câmera, voltado ao Samsung Galaxy A17 **SM-A175F/DS** (4G), sem root. Interface em português, fotos JPEG/PNG e vídeo MP4 salvos em `DCIM/LumaA17`.
 
-Versão **1.1.0**, com perfil de luminosidade adaptativo após relato de capturas mais escuras que a câmera Samsung. **Não há promessa de qualidade igual à de um iPhone ou superior à câmera Samsung.** Não foi feita calibração de imagem em um A17 físico. O processamento proprietário da Apple não é transferível, e fabricantes podem reservar recursos para seu próprio aplicativo. Megapixels sozinhos não determinam qualidade.
+Versão **1.2.0**, com perfil de luminosidade adaptativo após relato de capturas mais escuras que a câmera Samsung. **Não há promessa de qualidade igual à de um iPhone ou superior à câmera Samsung.** Não foi feita calibração de imagem em um A17 físico. O processamento proprietário da Apple não é transferível, e fabricantes podem reservar recursos para seu próprio aplicativo. Megapixels sozinhos não determinam qualidade.
+
+## Novidades da versão 1.2
+
+O diagnóstico real enviado de um SM-A175F com Android 16 mostrou que o app 1.0 capturava em **1440 × 1080 (1,6 MP)**. Os JPEGs de **4080 × 3060 (12,5 MP)** da principal e **4128 × 3096 (12,8 MP)** da frontal aparecem apenas em `getHighResolutionOutputSizes`. Agora o perfil normal inclui essa lista e permite que CameraX escolha esses tamanhos. Um primeiro fallback conserva alta resolução com controles mais simples; somente o último fallback reduz resolução, com aviso. A resolução ativa aparece no visor e no diagnóstico. Precisa de confirmação de captura no aparelho físico.
+
+- Visor em tela cheia com controles sobrepostos e barras do sistema ocultas. O modo ampliado recorta **somente a prévia** para preencher a tela; a foto continua inteira em 4:3 e o vídeo em 16:9. Desative a opção para conferir o quadro completo.
+- **RETRATO** de pessoas com ML Kit Selfie Segmentation, modelo incluído no APK, executado localmente após capturar. Se não encontrar pessoa, conserva o original e informa o problema. Intensidade ajustável. Não simula um sensor de profundidade: cabelo, vidro e contornos podem falhar.
+- O retrato compõe o assunto na resolução original, com desfoque calculado em uma versão pequena do fundo e máscara suavizada. A saída é **PNG SDR**, sem uma nova perda de compressão JPEG. O JPEG original, inclusive eventual ganho Ultra HDR, permanece intacto. Edições locais acima de 20 MP são recusadas em vez de silenciosamente reduzidas.
+- Toque na miniatura para revisar a foto inteira, comparar original e última cópia, criar retrato, exportar PNG ou usar Gemini. PNG não recupera detalhe perdido no JPEG e não é RAW. Não há captura RAW/DNG nesta versão; o novo diagnóstico informa se o firmware libera RAW, câmeras físicas e grupos simultâneos.
+- Gemini opcional com chave pessoal editável, criptografada por AES-GCM e chave do Android Keystore. Um ID `gen-lang-client-…` não autentica. Configure uma **API key** do Google AI Studio; o modelo e a saída 2K/4K também podem ser alterados.
+- Gemini usa `POST /v1beta/interactions`, `store:false`, uma foto por ação confirmada, sem envio de vídeo, sem repetição automática paga e sem chave em URLs ou logs. O upload é limitado a 4096 pixels no lado maior e 15 MB, sem EXIF. Solicita PNG em 4K por padrão; a resolução e os detalhes finais dependem do modelo, que pode alterar a cena. O arquivo recebido é validado e salvo separadamente. Não é uma melhoria óptica nem um filtro em tempo real. Não foi testado com uma chave real.
+
+O diagnóstico não demonstrou captura sincronizada/calibrada de duas lentes. Listar mais de uma câmera não significa poder fundi-las, nem somar megapixels. **Não há fusão de lentes, 4K de vídeo, ProRAW, ProRes, Live Photos, modo Cinema ou Deep Fusion**. A referência de interface e funções é o app Câmera da Apple; seus algoritmos e recursos exclusivos não foram copiados.
 
 ## Captura
 
@@ -24,11 +37,13 @@ Os ajustes Camera2 são solicitações ao fabricante, não garantia de imagem me
 
 ## Privacidade
 
-O manifesto solicita apenas câmera e microfone. Microfone é pedido ao tentar gravar com som. Não há permissão de internet, root, localização, leitura ampla da galeria, telemetria, anúncios ou serviços em segundo plano. A gravação é encerrada quando o aplicativo sai do primeiro plano. Arquivos criados pelo aplicativo usam MediaStore; a última captura pode ser aberta no visualizador escolhido no Android. O diagnóstico não contém mídias, número de série ou contas.
+O manifesto solicita câmera, microfone e internet. Microfone é pedido ao tentar gravar com som. Fotos e vídeo usam MediaStore, sem leitura ampla da galeria ou localização. Captura e retrato não enviam fotos ao Gemini; somente o botão **Enviar esta foto** inicia essa transmissão. A API do Google pode ter cobrança e políticas próprias. Não há chave embutida ou backend compartilhado; esta integração BYOK é para uso pessoal. Para distribuir um serviço com chave própria, use um backend em vez de incluí-la no APK. A biblioteca ML Kit inclui um modelo local e pode coletar métricas operacionais conforme os termos do Google; não equivale a enviar a foto para edição na nuvem. O diagnóstico não contém mídia, chaves, número de série ou contas. Backups do aplicativo estão desativados.
+
+Originais nunca são substituídos por edições. Cópias usam `IS_PENDING` e são publicadas na galeria somente ao concluir; falhas removem a entrada incompleta. O processamento pode ser interrompido se o Android encerrar o processo; o original já estará salvo.
 
 ## Compilação
 
-Requer JDK 17, Android SDK 36, Build Tools 35.0.0 e internet para baixar as dependências. O Gradle Wrapper 8.13 está incluído. O aplicativo exige Android 10 ou superior; o alvo principal é o A17 com Android 15/One UI 7.
+Requer JDK 17, Android SDK 36, Build Tools 35.0.0 e internet para baixar as dependências. O Gradle Wrapper 8.13 está incluído. O aplicativo exige Android 10 ou superior; o alvo principal é o A17, incluindo o Android 16 do diagnóstico recebido.
 
 ```sh
 ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
@@ -48,9 +63,14 @@ Para gerar uma versão de distribuição assinada, mantenha a chave fora do repo
 
 Testes locais cobrem limites de exposição, obturador, rotação, bitrate, escolha de FPS, cenas escuras, altas luzes, superfície ainda sem imagem e estabilidade do ajuste de luminosidade. Compilação/lint não substituem os testes ópticos, térmicos e de estabilidade no telefone.
 
+A suíte instrumentada cobre captura real em emulador, gravação reproduzível, pausa/retomada, revisão em tela cheia, PNG de 12,5 MP sem alteração de pixels, carregamento do modelo de retrato e cena sem pessoa, substituição/criptografia da chave e parsing de respostas Gemini simuladas. Os testes numéricos incluem a regressão dos tamanhos do diagnóstico real e a preservação dos pixels da pessoa no compositor. Nenhum teste paga uma solicitação Gemini. O teste com retrato de pessoas reais no A17 continua necessário para avaliar contornos e memória.
+
 ## Referências
 
 - [Especificações oficiais do Galaxy A17 SM-A175F](https://www.samsung.com/br/smartphones/galaxy-a/galaxy-a17-gray-128gb-sm-a175fzafzto/): traseiras 50 + 5 + 2 MP, frontal 13 MP com foco fixo, OIS principal, gravação FHD a 30 fps.
+- [ML Kit Selfie Segmentation](https://developers.google.com/ml-kit/vision/selfie-segmentation/android)
+- [Gemini: edição de imagem](https://ai.google.dev/gemini-api/docs/image-generation)
+- [App Câmera da Apple](https://apps.apple.com/br/app/c%C3%A2mera/id1584216193)
 - [Android CameraX](https://developer.android.com/media/camera/camerax)
 - [Extensões de câmera](https://developer.android.com/media/camera/camerax/extensions-api)
 - [Captura de vídeo](https://developer.android.com/media/camera/camerax/video-capture)
