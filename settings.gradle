@@ -7,6 +7,8 @@ dependencyResolutionManagement {
                 includeGroupByRegex 'androidx\\..*'
                 includeGroupByRegex 'com\\.android.*'
                 includeGroupByRegex 'com\\.google\\.android.*'
+                includeGroupByRegex 'com\\.google\\.mlkit.*'
+                includeGroupByRegex 'com\\.google\\.firebase.*'
                 includeGroupByRegex 'com\\.google\\.testing.*'
                 includeGroupByRegex 'com\\.google\\.test.*'
             }
