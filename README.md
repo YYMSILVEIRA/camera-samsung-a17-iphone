@@ -4,6 +4,15 @@ Aplicativo Android nativo de câmera, voltado ao Samsung Galaxy A17 **SM-A175F/D
 
 Esta é uma primeira versão funcional para teste no aparelho. **Não há promessa de qualidade igual à de um iPhone ou superior à câmera Samsung.** Não foi feita calibração de imagem em um A17 físico. O processamento proprietário da Apple não é transferível, e fabricantes podem reservar recursos para seu próprio aplicativo. Megapixels sozinhos não determinam qualidade.
 
+## Correção de autenticação e teste Gemini · versão 1.1.1
+
+- Chaves do Google AI Studio iniciadas por `AQ.` **ou** `AIza` são aceitas sem bloqueio por prefixo. O Google migrou para chaves `AQ.`; o formato não é inválido por si só.
+- **Testar conexão com Gemini** dentro dos Ajustes verifica uma chamada real e pequena de geração de texto pelo modelo `gemini-3.8-flash`, sem enviar fotos; pode consumir tokens e não confirma automaticamente o acesso ao modelo de imagens.
+- Mostra respostas úteis para HTTP 400, 401, 403, 404, 429 e falhas do servidor, incluindo códigos públicos de erro, sem registrar credenciais.
+- As fotografias são editadas por `gemini-3.1-flash-image`, solicitando imagem 2K e preservando a captura original no armazenamento do aparelho. A qualidade gerada por IA não substitui dados reais do sensor.
+- Aplicar não depende do teste externo; em caso de erro ao cifrar a chave, outros ajustes da câmera ainda são salvos. O envio automático à IA permanece desligado caso a chave não seja armazenada corretamente.
+- Chaves divulgadas em conversas devem ser substituídas por segurança. Nenhuma credencial é incluída no repositório ou APK.
+
 ## Melhorias da versão 1.1.0
 
 - Fotografia em JPEG 97% ou 100% e maior resolução realmente exposta pela câmera. JPEG 100% gera arquivos maiores sem criar detalhes reais.

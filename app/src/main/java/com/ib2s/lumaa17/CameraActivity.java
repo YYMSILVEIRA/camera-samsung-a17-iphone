@@ -554,7 +554,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         hint(box, "Gemini NÃO aumenta a capacidade do sensor nem otimiza vídeo em tempo real. Edita uma CÓPIA da foto após capturar; pode inventar detalhes ou mudar resolução. Precisa internet, chave do Google AI Studio, e pode gerar cobranças.");
         EditText key = new EditText(this);
         key.setSingleLine(true);
-        key.setHint("Cole sua API key do Google AI Studio");
+        key.setHint("Chave Gemini (AQ. ou AIza...)");
         key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         key.setTextSize(14);
         box.addView(key, new LinearLayout.LayoutParams(-1, dp(54)));
@@ -564,6 +564,40 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         } catch (Exception ignored) {
             hint(box, "A chave anterior não pôde ser lida. Cadastre uma nova.");
         }
+        hint(box, "Aceita chaves AQ. e AIza. O botão Aplicar salva a chave sem bloquear por formato; o teste chama o Google e informa o erro específico. Nunca compartilhe a chave em prints ou mensagens.");
+        Button testGemini = button("Testar conexão com Gemini", "Executar teste de autenticação sem enviar fotografias", v -> {
+            String candidate = key.getText().toString().trim();
+            if (candidate.isEmpty()) {
+                try { candidate = GeminiKeyStore.load(this); }
+                catch (Exception ex) {
+                    toast("Não foi possível abrir a chave armazenada. Digite uma chave nova.");
+                    return;
+                }
+            }
+            if (candidate.isEmpty()) {
+                toast("Digite ou salve uma chave do Google AI Studio primeiro.");
+                return;
+            }
+            final String testKey = candidate;
+            v.setEnabled(false);
+            files.execute(() -> {
+                String title = "Teste Gemini";
+                String message;
+                try {
+                    message = GeminiPhotoEnhancer.testConnection(testKey);
+                } catch (Exception ex) {
+                    message = ex.getMessage() == null ? "Falha de conexão. Confira internet e serviço Google." : ex.getMessage();
+                }
+                final String finalMessage = message;
+                runOnUiThread(() -> {
+                    v.setEnabled(true);
+                    if (!destroyed && !isFinishing()) new AlertDialog.Builder(this)
+                        .setTitle(title).setMessage(finalMessage).setPositiveButton("Entendi", null).show();
+                });
+            });
+        });
+        box.addView(testGemini, new LinearLayout.LayoutParams(-1, dp(56)));
+        hint(box, "O teste envia somente a frase 'Responda OK' ao Gemini 3.8 Flash. Pode consumir tokens. Não envia fotos e não garante acesso ao modelo de imagens.");
         CheckBox erase = check(box, "Apagar chave Gemini armazenada", false);
         CheckBox automatic = check(box, "Enviar cada nova foto automaticamente à IA", settings.geminiAutomatic);
         hint(box, "DESATIVADO por padrão. Ao ativar, você autoriza o envio de cada foto ao Google. O original continua local; a cópia gerada vai para DCIM/LumaA17/IA.");
@@ -587,19 +621,20 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox grid = check(box, "Grade de composição", settings.grid);
         CheckBox horizon = check(box, "Nível do horizonte", settings.level);
         section(box, "SOBRE ESTA VERSÃO");
-        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android sem root. Fotos JPEG e Ultra HDR compatível. HEIC/HEVC ainda não estão habilitados nesta versão: não é correto fingir que um JPEG/MP4 H.264 tenha outro codec. Gemini é opcional e não recebe vídeos.");
+        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android sem root. Gemini 3.1 Flash Image gera uma cópia editada em até 2K; pode modificar detalhes. HEIC/HEVC não habilitados. Gemini é opcional e não recebe vídeos.");
         Button diagnostics = button("Salvar diagnóstico de câmera", "Salvar capacidades disponíveis em arquivo", v -> saveDiagnostic());
         box.addView(diagnostics);
         new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll)
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Aplicar", (d, w) -> {
+                boolean savedKey = true;
                 try {
                     if (erase.isChecked()) GeminiKeyStore.save(this, "");
                     else if (!key.getText().toString().trim().isEmpty())
                         GeminiKeyStore.save(this, key.getText().toString().trim());
                 } catch (Exception ex) {
-                    toast("Não foi possível salvar a chave Gemini; confira o Android Keystore.");
-                    return;
+                    savedKey = false;
+                    toast("Erro ao guardar chave no Android Keystore; outros ajustes serão aplicados.");
                 }
                 boolean rebind = settings.detail != detail.isChecked() || settings.mirror != mirror.isChecked()
                     || settings.highBitrate != high.isChecked() || settings.videoHd != hd.isChecked()
@@ -611,7 +646,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                 settings.videoHd = hd.isChecked(); settings.maximumVideoQuality = videoMax.isChecked();
                 settings.jpegMaximum = jpeg.isChecked(); settings.ultraHdr = hdr.isChecked();
                 settings.sound = audio.isChecked(); settings.stabilization = stabilization.isChecked();
-                settings.geminiAutomatic = automatic.isChecked() && !erase.isChecked();
+                settings.geminiAutomatic = automatic.isChecked() && !erase.isChecked() && savedKey;
                 settings.geminiStyle = style.getSelectedItemPosition();
                 settings.grid = grid.isChecked(); settings.level = horizon.isChecked();
                 settings.save(preferences);

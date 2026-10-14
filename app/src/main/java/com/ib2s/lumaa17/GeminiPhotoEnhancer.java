@@ -26,10 +26,89 @@ import org.json.JSONObject;
  */
 final class GeminiPhotoEnhancer {
     private static final String ENDPOINT =
-            "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-image:generateContent";
+            "https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent";
+    private static final String TEST_ENDPOINT =
+            "https://generativelanguage.googleapis.com/v1/models/gemini-3.8-flash:generateContent";
     private static final int INPUT_LIMIT = 10 * 1024 * 1024;
     private static final int RESPONSE_LIMIT = 36 * 1024 * 1024;
     private GeminiPhotoEnhancer() {}
+
+    /**
+     * An explicit lightweight generation request, not a mere models.list check.
+     * A successful response verifies text generation for the account, not image-model quota.
+     */
+    static String testConnection(String apiKey) throws Exception {
+        if (apiKey == null || apiKey.trim().isEmpty())
+            throw new IllegalArgumentException("Insira uma chave ou salve uma chave antes de testar.");
+        JSONObject body = new JSONObject()
+                .put("contents", new JSONArray().put(new JSONObject()
+                        .put("parts", new JSONArray().put(new JSONObject().put("text", "Responda apenas OK.")))))
+                .put("generationConfig", new JSONObject().put("maxOutputTokens", 48));
+        HttpURLConnection connection = (HttpURLConnection) new URL(TEST_ENDPOINT).openConnection();
+        try {
+            connection.setConnectTimeout(12000);
+            connection.setReadTimeout(25000);
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("x-goog-api-key", apiKey.trim());
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            try (OutputStream out = connection.getOutputStream()) {
+                out.write(body.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            int status = connection.getResponseCode();
+            if (status != 200) throw apiError(connection, status);
+            try (InputStream in = connection.getInputStream()) {
+                readLimited(in, 100_000);
+            }
+            return "Conexão de geração de texto autorizada (Gemini 3.8 Flash). "
+                    + "Sua chave foi reconhecida para esse modelo. "
+                    + "A edição de fotos pelo Gemini 3.1 Flash Image ainda depende de acesso ao modelo e de cota; "
+                    + "uma foto real deve ser testada para confirmar a edição. "
+                    + "Este teste pode consumir uma pequena quantidade de tokens.";
+        } finally { connection.disconnect(); }
+    }
+
+    private static IOException apiError(HttpURLConnection connection, int http) {
+        String reason = "";
+        try (InputStream stream = connection.getErrorStream()) {
+            if (stream != null) {
+                JSONObject json = new JSONObject(new String(readLimited(stream, 128 * 1024), StandardCharsets.UTF_8));
+                JSONObject error = json.optJSONObject("error");
+                if (error != null) {
+                    JSONArray details = error.optJSONArray("details");
+                    if (details != null) {
+                        for (int i=0; i<details.length(); i++) {
+                            JSONObject detail = details.optJSONObject(i);
+                            if (detail != null && !detail.optString("reason").isEmpty()) {
+                                reason = detail.optString("reason");
+                                break;
+                            }
+                        }
+                    }
+                    if (reason.isEmpty()) reason = error.optString("status", "");
+                }
+            }
+        } catch (Exception ignored) { /* Never expose response body, headers, or API keys. */ }
+        // Google's reason/status is a machine-readable label, never a copy of a secret.
+        reason = reason.replaceAll("[^A-Z0-9_]", "");
+        if (reason.length() > 48) reason = reason.substring(0, 48);
+        String suffix = reason.isEmpty() ? "" : " · " + reason;
+        if (http == 400) return new IOException("Google rejeitou a solicitação (HTTP 400" + suffix
+                + "). Se for API_KEY_INVALID, confira a chave completa; outros erros 400 podem ser do modelo ou formato.");
+        if (http == 401) return new IOException("Google recusou a autenticação (HTTP 401" + suffix
+                + "). Chaves AQ. são um formato legítimo, mas alguns projetos têm problemas de autenticação. "
+                + "Confira a chave, o projeto associado e as permissões da Gemini API no AI Studio.");
+        if (http == 403) return new IOException("Acesso não autorizado para este projeto/modelo (HTTP 403"
+                + suffix + "). Verifique restrições da chave, Gemini API e faturamento no Google AI Studio.");
+        if (http == 404) return new IOException("Modelo indisponível neste projeto ou versão da API (HTTP 404"
+                + suffix + "). A chave não foi necessariamente rejeitada.");
+        if (http == 429) return new IOException("Cota ou créditos da Gemini API esgotados (HTTP 429"
+                + suffix + "). Confira limites e faturamento no AI Studio.");
+        if (http >= 500) return new IOException("Serviço Google temporariamente indisponível (HTTP "
+                + http + suffix + "). Tente novamente.");
+        return new IOException("Gemini retornou HTTP " + http + suffix
+                + ". Confira configurações e disponibilidade da API no AI Studio.");
+    }
 
     static Uri improve(Context context, Uri original, String key, int style) throws Exception {
         if (key == null || key.trim().isEmpty())
@@ -49,7 +128,9 @@ final class GeminiPhotoEnhancer {
                         .put("mime_type", "image/jpeg")
                         .put("data", Base64.encodeToString(photo, Base64.NO_WRAP)))))))
             .put("generationConfig", new JSONObject()
-                .put("responseModalities", new JSONArray().put("TEXT").put("IMAGE")));
+                .put("responseModalities", new JSONArray().put("TEXT").put("IMAGE"))
+                .put("responseFormat", new JSONObject()
+                        .put("image", new JSONObject().put("imageSize", "2K"))));
         HttpURLConnection connection = (HttpURLConnection) new URL(ENDPOINT).openConnection();
         try {
             connection.setConnectTimeout(15000);
@@ -63,11 +144,7 @@ final class GeminiPhotoEnhancer {
                 out.write(request.toString().getBytes(StandardCharsets.UTF_8));
             }
             int code = connection.getResponseCode();
-            if (code != 200) {
-                if (code == 401 || code == 403) throw new IOException("Chave Gemini recusada (HTTP " + code + "). Confira se é uma API key do Google AI Studio.");
-                if (code == 429) throw new IOException("Limite de uso do Gemini atingido (HTTP 429).");
-                throw new IOException("O serviço Gemini recusou a imagem (HTTP " + code + ").");
-            }
+            if (code != 200) throw apiError(connection, code);
             byte[] response;
             try (InputStream in = connection.getInputStream()) { response = readLimited(in, RESPONSE_LIMIT); }
             JSONObject body = new JSONObject(new String(response, StandardCharsets.UTF_8));

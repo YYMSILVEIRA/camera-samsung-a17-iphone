@@ -36,10 +36,10 @@ jobs:
       - name: Prepare downloadable APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.1.0-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.1.1-debug.apk
       - name: Publish APK in prerelease
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v1.1.0-debug Luma-A17-v1.1.0-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.1.0 (APK teste)" --notes "Compilação Android automática com opções de qualidade e Gemini opcional. APK debug; se houver conflito de assinatura com teste anterior, desinstale o APK antigo antes." --prerelease
+          gh release create v1.1.1-debug Luma-A17-v1.1.1-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.1.1 (APK teste)" --notes "Compilação Android automática com opções de qualidade e Gemini opcional. APK debug; se houver conflito de assinatura com teste anterior, desinstale o APK antigo antes." --prerelease
