@@ -22,6 +22,22 @@ public final class CapturePolicy {
                 : height >= 720 ? (high ? 12_000_000 : 8_000_000) : 4_000_000;
     }
 
+    /** Pick only an advertised range. Variable FPS permits a longer exposure in dim scenes. */
+    public static int[] frameRate(int[][] supported, boolean video, boolean fixed) {
+        int[] best = null;
+        int bestScore = Integer.MAX_VALUE;
+        for (int[] range : supported) {
+            if (range == null || range.length != 2 || range[0] <= 0 || range[0] > range[1]
+                    || range[1] != 30) continue;
+            int desiredMinimum = fixed && video ? 30 : video ? 15 : 7;
+            int score = Math.abs(range[0] - desiredMinimum);
+            // Prefer a variable range when both are equally close to the requested minimum.
+            if (range[0] == range[1] && !(fixed && video)) score += 30;
+            if (score < bestScore) { bestScore = score; best = range; }
+        }
+        return best;
+    }
+
     public static int rotationDegrees(int orientation) {
         if (orientation < 0) return 0;
         if (orientation >= 315 || orientation < 45) return 0;

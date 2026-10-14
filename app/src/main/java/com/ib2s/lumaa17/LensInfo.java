@@ -61,6 +61,13 @@ public final class LensInfo {
     public boolean edge(int mode) { return has(get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES), mode); }
     public boolean antibanding(int mode) { return has(get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES), mode); }
     public boolean manualAvailable() { return manual && isoRange != null && shutterRange != null; }
+    public Range<Integer> frameRate(boolean video, boolean fixed) {
+        List<int[]> ranges = new ArrayList<>();
+        for (Range<Integer> range : info.getSupportedFrameRateRanges())
+            ranges.add(new int[]{range.getLower(), range.getUpper()});
+        int[] selected = CapturePolicy.frameRate(ranges.toArray(new int[0][]), video, fixed);
+        return selected == null ? null : new Range<>(selected[0], selected[1]);
+    }
     public Size balancedPhotoSize() {
         StreamConfigurationMap map = get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
         Size chosen = new Size(4000, 3000);
@@ -97,7 +104,8 @@ public final class LensInfo {
                 .put("manualSensor", manual).put("minimumFocusDistance", minFocus)
                 .put("hardwareLevel", get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL))
                 .put("isoRange", String.valueOf(isoRange)).put("exposureTimeRangeNs", String.valueOf(shutterRange))
-                .put("aeLock", aeLock).put("awbLock", awbLock);
+                .put("aeLock", aeLock).put("awbLock", awbLock)
+                .put("lowLightBoostSupported", info.isLowLightBoostSupported());
         JSONArray sizes = new JSONArray();
         StreamConfigurationMap map = get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
         if (map != null) {

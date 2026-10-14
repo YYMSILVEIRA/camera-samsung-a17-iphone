@@ -81,6 +81,7 @@ public final class CameraEngine {
         void onSaved(Uri uri, boolean video);
         void onRecording(boolean recording, boolean paused, long millis, long bytes);
         void onTelemetry(String text);
+        void onExposureChanged();
     }
     private final Context context;
     private final LifecycleOwner owner;
@@ -90,6 +91,7 @@ public final class CameraEngine {
     private final Executor main;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final PreviewMeter meter;
     private ProcessCameraProvider provider;
     private ExtensionsManager extensions;
     private ImageCapture imageCapture;
@@ -103,6 +105,12 @@ public final class CameraEngine {
     private long durationMillis, recordingBytes;
     private int rotation = Surface.ROTATION_0;
     private String videoDescription = "";
+    private Range<Integer> sessionFps;
+    private boolean ultraHdrActive, lowLightRequested, lowLightRejected, torchRequested, exposurePending;
+    private double autoExposure = 1.0 / 3, appliedEv;
+    private int requestedExposureIndex = Integer.MIN_VALUE;
+    private long meterPausedUntil;
+    private ExposureAdvisor.Sample lastMeterSample;
     public Camera camera;
     public LensInfo lens;
     public final List<LensInfo> lenses = new ArrayList<>();
@@ -112,6 +120,7 @@ public final class CameraEngine {
         this.context = context; this.owner = owner; this.previewView = previewView;
         this.settings = settings; this.listener = listener;
         main = ContextCompat.getMainExecutor(context);
+        meter = new PreviewMeter(previewView);
     }
 
     public boolean isBusy() { return busy; }
@@ -121,6 +130,9 @@ public final class CameraEngine {
     public boolean isConservative() { return conservative; }
     public boolean isReady() { return camera != null && !busy; }
     public void setRotation(int value) { rotation = value; }
+    public double exposureEv() { return appliedEv; }
+    public boolean isAutoExposure() { return settings.smartExposure && !settings.userExposureOverride
+            && !settings.manualExposure && !isExtension() && !conservative; }
 
     public void initialize() {
         if (closed || initializing) return;
@@ -168,19 +180,26 @@ public final class CameraEngine {
 
     public void selectLens(LensInfo next) {
         if (isRecording() || busy || next == null) return;
-        lens = next; settings.resetLensControls(); bind();
+        boolean auto = settings.extension == ExtensionMode.AUTO;
+        lens = next; settings.resetLensControls();
+        if (auto && extensionAvailable(ExtensionMode.AUTO)) settings.extension = ExtensionMode.AUTO;
+        bind();
     }
 
     public void bind() {
         if (closed || provider == null || lens == null || isRecording()) return;
         // Photo callbacks must finish before releasing their capture session.
         setBusy(true); settings.lock = false;
+        meter.stop();
         if (camera != null) {
             camera.getCameraInfo().getCameraState().removeObservers(owner);
             camera.getCameraInfo().getZoomState().removeObservers(owner);
         }
         camera = null;
         imageCapture = null; videoCapture = null;
+        autoExposure = 1.0 / 3; appliedEv = 0; requestedExposureIndex = Integer.MIN_VALUE;
+        exposurePending = false; lowLightRequested = false; lowLightRejected = false; torchRequested = false;
+        lastMeterSample = null;
         int token = ++generation;
         tryBind(token, false);
     }
@@ -189,8 +208,11 @@ public final class CameraEngine {
         if (closed || token != generation) return;
         provider.unbindAll();
         conservative = safe;
+        ultraHdrActive = false; sessionFps = null;
         try {
             CameraSelector selector = lens.selector();
+            if (!settings.video && settings.extension == ExtensionMode.AUTO && !extensionAvailable(ExtensionMode.AUTO))
+                settings.extension = ExtensionMode.NONE;
             boundExtension = !settings.video && !safe && extensionAvailable(settings.extension)
                     ? settings.extension : ExtensionMode.NONE;
             if (boundExtension != ExtensionMode.NONE) {
@@ -199,6 +221,12 @@ public final class CameraEngine {
             Preview.Builder pb = new Preview.Builder().setResolutionSelector(new ResolutionSelector.Builder()
                     .setAspectRatioStrategy(settings.video ? AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
                             : AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY).build());
+            if (!safe && !isExtension()) {
+                sessionFps = lens.frameRate(settings.video, settings.stableVideo);
+                // A photo preview may slow down without reducing the JPEG's resolution.
+                if (!settings.video && sessionFps != null)
+                    new Camera2Interop.Extender<>(pb).setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, sessionFps);
+            }
             if (!isExtension() && !safe) {
                 new Camera2Interop.Extender<>(pb).setSessionCaptureCallback(new CameraCaptureSession.CaptureCallback() {
                     @Override public void onCaptureCompleted(@NonNull CameraCaptureSession session,
@@ -238,8 +266,7 @@ public final class CameraEngine {
                         .setDynamicRange(DynamicRange.SDR)
                         .setMirrorMode(settings.mirror ? MirrorMode.MIRROR_MODE_ON_FRONT_ONLY : MirrorMode.MIRROR_MODE_OFF)
                         .setTargetRotation(rotation);
-                if (!safe && lens.info.getSupportedFrameRateRanges().contains(new Range<>(30, 30)))
-                    vb.setTargetFrameRate(new Range<>(30, 30));
+                if (!safe && sessionFps != null) vb.setTargetFrameRate(sessionFps);
                 // Do not combine EIS with OIS: some HALs reject or over-crop that combination.
                 boolean useEis = !safe && settings.stabilization && !lens.ois
                         && Recorder.getVideoCapabilities(lens.info).isStabilizationSupported();
@@ -247,11 +274,21 @@ public final class CameraEngine {
                 videoCapture = vb.build();
                 camera = provider.bindToLifecycle(owner, selector, preview, videoCapture);
                 videoDescription = (size == null ? "Vídeo" : size.getWidth() + " × " + size.getHeight())
-                        + (safe ? " · automático" : " · alvo 30 fps · " + bitrate / 1_000_000 + " Mb/s");
+                        + (safe ? " · automático" : " · " + fpsLabel() + " · " + bitrate / 1_000_000 + " Mb/s");
             } else {
                 ImageCapture.Builder ib = new ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                        .setJpegQuality(97).setTargetRotation(rotation);
+                        .setJpegQuality(100).setTargetRotation(rotation);
+                if (!safe && settings.ultraHdr) {
+                    try {
+                        CameraInfo captureInfo = isExtension() ? provider.getCameraInfo(selector) : lens.info;
+                        if (ImageCapture.getImageCaptureCapabilities(captureInfo).getSupportedOutputFormats()
+                                .contains(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR)) {
+                            ib.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
+                            ultraHdrActive = true;
+                        }
+                    } catch (RuntimeException ex) { Log.w("Luma", "Ultra HDR capability unavailable", ex); }
+                }
                 if (!isExtension() && !safe) {
                     ResolutionSelector.Builder resolution = new ResolutionSelector.Builder()
                             .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY);
@@ -271,6 +308,7 @@ public final class CameraEngine {
             }
             setBusy(false);
             if (!safe && !isExtension()) applyControls();
+            startExposureMeter(token);
             camera.getCameraInfo().getCameraState().observe(owner, state -> {
                 if (token != generation || closed) return;
                 CameraState.StateError error = state.getError();
@@ -298,10 +336,8 @@ public final class CameraEngine {
         CaptureRequestOptions.Builder options = new CaptureRequestOptions.Builder();
         if (lens.ois) options.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
                 settings.stabilization ? CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON : CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF);
-        int nr = settings.video ? CaptureRequest.NOISE_REDUCTION_MODE_FAST : CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY;
-        if (lens.noise(nr)) options.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, nr);
-        // Avoid OFF sharpening on unknown HALs; FAST is a balanced, manufacturer-calibrated path.
-        if (lens.edge(CaptureRequest.EDGE_MODE_FAST)) options.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST);
+        // Keep the manufacturer's per-template noise reduction, sharpening and tone mapping.
+        // A repeating FAST/HIGH_QUALITY override also affects still requests and can erase detail.
         if (lens.wb(settings.whiteBalance)) options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, settings.whiteBalance);
         if (lens.antibanding(settings.antibanding)) options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, settings.antibanding);
         if (lens.aeLock) options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, settings.lock && !settings.manualExposure);
@@ -324,17 +360,71 @@ public final class CameraEngine {
             }
         }, main);
         if (imageCapture != null) imageCapture.setFlashMode(lens.info.hasFlashUnit() && !settings.manualExposure ? settings.flash : ImageCapture.FLASH_MODE_OFF);
-        if (!settings.manualExposure) setExposure(settings.ev);
+        updateLowLight();
+        if (!settings.manualExposure) applyExposure();
     }
 
     public void setExposure(double ev) {
-        if (camera == null || settings.manualExposure) return;
+        settings.userExposureOverride = true; settings.ev = ev;
+        applyExposure();
+    }
+
+    public void resetExposure() {
+        settings.userExposureOverride = false; settings.ev = 0; autoExposure = 1.0 / 3;
+        requestedExposureIndex = Integer.MIN_VALUE;
+        applyExposure();
+    }
+
+    private void applyExposure() {
+        if (camera == null || settings.manualExposure || isExtension() || conservative || settings.lock) return;
         ExposureState state = camera.getCameraInfo().getExposureState();
         if (!state.isExposureCompensationSupported()) return;
+        double ev = isAutoExposure() ? autoExposure : settings.ev;
         int index = CapturePolicy.exposureIndex(ev, state.getExposureCompensationStep().doubleValue(),
                 state.getExposureCompensationRange().getLower(), state.getExposureCompensationRange().getUpper());
-        settings.ev = index * state.getExposureCompensationStep().doubleValue();
-        observeControl(camera.getCameraControl().setExposureCompensationIndex(index));
+        if (index == requestedExposureIndex) return;
+        requestedExposureIndex = index; exposurePending = true;
+        Camera target = camera;
+        var request = target.getCameraControl().setExposureCompensationIndex(index);
+        request.addListener(() -> {
+            if (closed || target != camera || requestedExposureIndex != index) return;
+            exposurePending = false;
+            try {
+                request.get(); appliedEv = index * state.getExposureCompensationStep().doubleValue();
+                listener.onExposureChanged();
+            } catch (Exception ex) { requestedExposureIndex = Integer.MIN_VALUE; }
+        }, main);
+    }
+
+    private void startExposureMeter(int token) {
+        meter.start(() -> !closed && token == generation && camera != null && !busy && !exposurePending
+                        && isAutoExposure() && !settings.lock && !stopping && SystemClock.elapsedRealtime() >= meterPausedUntil
+                        && owner.getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                        && previewView.getPreviewStreamState().getValue() == PreviewView.StreamState.STREAMING,
+                () -> isRecording() ? 2800L : 1200L, sample -> {
+                    lastMeterSample = sample;
+                    autoExposure = ExposureAdvisor.next(autoExposure, sample, settings.video);
+                    applyExposure();
+                });
+    }
+
+    private void updateLowLight() {
+        if (camera == null || isExtension() || conservative || !camera.getCameraInfo().isLowLightBoostSupported()) return;
+        // This API brightens video/preview streams; do not make a JPEG promise based on it.
+        boolean desired = settings.lowLight && settings.video && !settings.manualExposure && !torchRequested && !lowLightRejected;
+        if (desired == lowLightRequested) return;
+        lowLightRequested = desired;
+        Camera target = camera;
+        var request = target.getCameraControl().enableLowLightBoostAsync(desired);
+        request.addListener(() -> {
+            try { request.get(); }
+            catch (Exception ex) {
+                if (!closed && target == camera && lowLightRequested == desired && desired) {
+                    lowLightRequested = false; lowLightRejected = true;
+                    Log.w("Luma", "Low-light boost rejected; keeping normal AE", ex);
+                }
+            }
+        }, main);
     }
 
     public void zoom(float ratio) {
@@ -346,6 +436,7 @@ public final class CameraEngine {
     public void focus(float x, float y, boolean lock) {
         if (camera == null || busy || conservative || isExtension()) return;
         settings.lock = false; settings.focusDistance = -1;
+        meterPausedUntil = SystemClock.elapsedRealtime() + 6000;
         applyControls();
         MeteringPoint point = previewView.getMeteringPointFactory().createPoint(x, y);
         int flags = FocusMeteringAction.FLAG_AE | FocusMeteringAction.FLAG_AWB;
@@ -373,7 +464,23 @@ public final class CameraEngine {
     }
 
     public void torch(boolean on) {
-        if (camera != null && camera.getCameraInfo().hasFlashUnit()) observeControl(camera.getCameraControl().enableTorch(on));
+        if (camera == null || !camera.getCameraInfo().hasFlashUnit()) return;
+        torchRequested = on;
+        Camera target = camera;
+        if (on && lowLightRequested) {
+            lowLightRequested = false;
+            var disable = target.getCameraControl().enableLowLightBoostAsync(false);
+            disable.addListener(() -> {
+                try { disable.get(); if (!closed && camera == target && torchRequested) observeControl(target.getCameraControl().enableTorch(true)); }
+                catch (Exception ex) { if (!closed && camera == target) listener.onNotice("Não foi possível ligar a luz. Tente novamente."); }
+            }, main);
+        } else {
+            var request = target.getCameraControl().enableTorch(on);
+            request.addListener(() -> {
+                try { request.get(); if (!closed && camera == target && !torchRequested) updateLowLight(); }
+                catch (Exception ignored) { }
+            }, main);
+        }
     }
 
     private void observeControl(ListenableFuture<?> future) {
@@ -470,9 +577,17 @@ public final class CameraEngine {
 
     public String sessionDescription() {
         if (settings.video) return videoDescription;
-        if (imageCapture == null || imageCapture.getResolutionInfo() == null) return "Foto · JPEG 97%";
+        String format = ultraHdrActive ? "Ultra HDR" : "JPEG 100%";
+        String mode = boundExtension == ExtensionMode.AUTO ? " · Auto nativo" : "";
+        if (imageCapture == null || imageCapture.getResolutionInfo() == null) return "Foto · " + format + mode;
         Size size = imageCapture.getResolutionInfo().getResolution();
-        return String.format(Locale.US, "%.1f MP · JPEG 97%%", size.getWidth() * (double) size.getHeight() / 1_000_000);
+        return String.format(Locale.US, "%.1f MP · %s%s", size.getWidth() * (double) size.getHeight() / 1_000_000, format, mode);
+    }
+
+    private String fpsLabel() {
+        if (sessionFps == null) return "fps automático";
+        return sessionFps.getLower().equals(sessionFps.getUpper()) ? "alvo " + sessionFps.getUpper() + " fps"
+                : sessionFps.getLower() + "–" + sessionFps.getUpper() + " fps adaptativo";
     }
 
     public String diagnostic() throws Exception {
@@ -481,6 +596,12 @@ public final class CameraEngine {
                 .put("android", Build.VERSION.RELEASE).put("sdk", Build.VERSION.SDK_INT)
                 .put("cameraX", "1.5.3").put("currentSession", sessionDescription())
                 .put("compatibleFallback", conservative).put("extensionMode", boundExtension)
+                .put("targetFpsRange", String.valueOf(sessionFps)).put("ultraHdr", ultraHdrActive)
+                .put("lowLightBoostRequested", lowLightRequested).put("lowLightBoostRejected", lowLightRejected)
+                .put("smartExposure", isAutoExposure()).put("appliedExposureEv", appliedEv)
+                .put("previewMedian", lastMeterSample == null ? JSONObject.NULL : lastMeterSample.median)
+                .put("previewHighlights", lastMeterSample == null ? JSONObject.NULL : lastMeterSample.highlights)
+                .put("previewClippedFraction", lastMeterSample == null ? JSONObject.NULL : lastMeterSample.clipped)
                 .put("qualityCalibratedOnPhysicalA17", false);
         JSONArray cameras = new JSONArray();
         for (LensInfo item : lenses) {
@@ -488,6 +609,7 @@ public final class CameraEngine {
             try {
                 info.put("hdrExtension", extensions != null && extensions.isExtensionAvailable(item.selector(), ExtensionMode.HDR));
                 info.put("nightExtension", extensions != null && extensions.isExtensionAvailable(item.selector(), ExtensionMode.NIGHT));
+                info.put("autoExtension", extensions != null && extensions.isExtensionAvailable(item.selector(), ExtensionMode.AUTO));
             } catch (RuntimeException ignored) { info.put("extensionQueryFailed", true); }
             cameras.put(info);
         }
@@ -500,6 +622,7 @@ public final class CameraEngine {
     public void close() {
         stopRecording(); closed = true; ++generation;
         handler.removeCallbacksAndMessages(null);
+        meter.stop();
         if (provider != null) provider.unbindAll();
         if (!isRecording()) io.shutdown();
     }

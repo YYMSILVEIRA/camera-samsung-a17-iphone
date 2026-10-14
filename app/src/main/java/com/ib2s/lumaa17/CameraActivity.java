@@ -97,6 +97,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         super.onCreate(state);
         preferences = getSharedPreferences("luma_camera", MODE_PRIVATE);
         settings = new CameraSettings(preferences);
+        settings.save(preferences);
         registerResults();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
@@ -217,6 +218,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
 
         LinearLayout exposure = row();
         evLabel = text("EV 0,0", 12, GOLD); evLabel.setContentDescription("Compensação de exposição");
+        evLabel.setContentDescription("Exposição. Toque para restaurar o ajuste automático de luminosidade.");
+        evLabel.setOnClickListener(v -> { if (available()) { engine.resetExposure(); refresh(); toast("Exposição automática restaurada"); } });
         exposure.addView(evLabel, new LinearLayout.LayoutParams(dp(65), dp(38)));
         evBar = new SeekBar(this); evBar.setContentDescription("Clarear ou escurecer a imagem");
         evBar.setProgressTintList(ColorStateList.valueOf(GOLD)); evBar.setThumbTintList(ColorStateList.valueOf(GOLD));
@@ -323,12 +326,14 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         if (!available() || engine.isRecording() || timer != null) return;
         settings.video = video; settings.extension = extension; settings.manualExposure = false;
         settings.focusDistance = -1; settings.lock = false; torchOn = false;
+        settings.userExposureOverride = false; settings.ev = 0;
         overlay.locked = false; overlay.invalidate();
         if (extension != ExtensionMode.NONE) { settings.whiteBalance = CaptureRequest.CONTROL_AWB_MODE_AUTO; settings.ev = 0; }
         engine.bind(); renderModes();
     }
     private void renderModes() {
         modes.removeAllViews();
+        if (engine != null && engine.extensionAvailable(ExtensionMode.AUTO)) modeButton("AUTO", false, ExtensionMode.AUTO);
         modeButton("FOTO", false, ExtensionMode.NONE);
         modeButton("VÍDEO", true, ExtensionMode.NONE);
         if (engine != null && engine.extensionAvailable(ExtensionMode.HDR)) modeButton("HDR", false, ExtensionMode.HDR);
@@ -395,6 +400,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         status.setText(text); retryButton.setVisibility(View.VISIBLE); refresh(); toast(text);
     }
     @Override public void onTelemetry(String text) { if (!destroyed) telemetry.setText(text); }
+    @Override public void onExposureChanged() { if (!destroyed) refresh(); }
     @Override public void onSaved(Uri uri, boolean video) {
         if (destroyed) return;
         lastUri = uri; lastVideo = video;
@@ -436,11 +442,11 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
             session.setText(engine.sessionDescription());
             ExposureState e = engine.camera.getCameraInfo().getExposureState();
             evBar.setMax(e.getExposureCompensationRange().getUpper() - e.getExposureCompensationRange().getLower());
-            evBar.setProgress(CapturePolicy.exposureIndex(settings.ev, e.getExposureCompensationStep().doubleValue(),
+            evBar.setProgress(CapturePolicy.exposureIndex(engine.exposureEv(), e.getExposureCompensationStep().doubleValue(),
                     e.getExposureCompensationRange().getLower(), e.getExposureCompensationRange().getUpper()) - e.getExposureCompensationRange().getLower());
             evBar.setEnabled(e.isExposureCompensationSupported() && !settings.manualExposure && !engine.isExtension() && !engine.isConservative() && timer == null);
         } else evBar.setEnabled(false);
-        evLabel.setText(settings.manualExposure ? "MANUAL" : String.format(Locale.getDefault(), "EV %+.1f", settings.ev));
+        evLabel.setText(settings.manualExposure ? "MANUAL" : String.format(Locale.getDefault(), "%s %+.1f", engine.isAutoExposure() ? "Auto" : "EV", engine.exposureEv()));
         for (int i=0;i<modes.getChildCount();i++) modes.getChildAt(i).setEnabled(mutable);
         if (previewFrame.video != settings.video) { previewFrame.video = settings.video; previewFrame.requestLayout(); }
         overlay.locked = settings.lock; overlay.invalidate();
@@ -466,32 +472,43 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         if (!canChange()) return;
         ScrollView scroll = new ScrollView(this); LinearLayout box = column(); box.setPadding(dp(22), dp(6), dp(22), dp(12)); scroll.addView(box);
         section(box, "FOTOGRAFIA");
+        CheckBox hdr = check(box, "Ultra HDR quando disponível", settings.ultraHdr);
+        hint(box, "Preserva uma faixa maior de brilho nas fotos quando esta lente oferece suporte. JPEG com qualidade máxima; a galeria precisa ser compatível para exibir HDR.");
         CheckBox detail = check(box, "Maior resolução disponível", settings.detail);
         hint(box, "Desativado: resolução próxima de 12 MP para equilibrar detalhe e velocidade. Ativado: maior JPEG exposto pelo aparelho; pode ficar mais lento.");
         CheckBox mirror = check(box, "Salvar selfie espelhada", settings.mirror);
         section(box, "VÍDEO");
         CheckBox high = check(box, "Taxa de bits alta", settings.highBitrate);
         hint(box, "Full HD: alvo de 16 Mb/s no padrão ou 24 Mb/s em alta. Arquivos maiores; a taxa final depende do codificador.");
+        CheckBox stable = check(box, "Priorizar 30 fps fixos", settings.stableVideo);
+        hint(box, "Desativado: permite reduzir os fps em pouca luz para capturar mais luz. Ative para priorizar movimento fluido; o vídeo pode escurecer em ambientes internos.");
+        CheckBox lowLight = check(box, "Mais luz no vídeo", settings.lowLight);
+        hint(box, "Ativa o reforço de pouca luz do Android somente quando o aparelho oferece suporte. Não funciona junto com a lanterna.");
         CheckBox hd = check(box, "Priorizar 720p", settings.videoHd);
         CheckBox audio = check(box, "Gravar áudio", settings.sound);
         section(box, "CAPTURA");
+        CheckBox smart = check(box, "Exposição inteligente", settings.smartExposure);
+        hint(box, "Clareia cenas escuras gradualmente e reduz o ajuste se houver áreas muito claras. Arrastar a barra de exposição assume o controle manual; toque no valor Auto/EV para restaurar.");
         CheckBox stabilization = check(box, "Estabilização disponível", settings.stabilization);
         hint(box, "Prioriza OIS quando disponível. Vídeo usa estabilização eletrônica compatível nas outras lentes. Pode haver recorte.");
         CheckBox grid = check(box, "Grade de composição", settings.grid);
         CheckBox horizon = check(box, "Nível do horizonte", settings.level);
         section(box, "SOBRE ESTA VERSÃO");
-        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android nativo\nProjetado para o SM-A175F/DS. Sem root, anúncios, conta ou internet.\n\nA qualidade precisa ser comparada no aparelho. Não replica o processamento proprietário da Apple nem garante superar a câmera Samsung. HDR e Noite só aparecem se o fabricante liberar os modos para esta lente.");
+        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android nativo\nProjetado para o SM-A175F/DS. Sem root, anúncios, conta ou internet.\n\nPerfil de luz adaptativo para frontal e traseira. AUTO, HDR, Noite e Ultra HDR dependem dos recursos que o fabricante liberar. A comparação final de qualidade deve ser feita no aparelho.");
         Button diagnostics = button("Salvar diagnóstico de câmera", "Salvar capacidades disponíveis em arquivo", v -> saveDiagnostic());
         box.addView(diagnostics); hint(box, "Registra modelo e recursos de câmera para ajustes futuros. Não inclui fotos, vídeos, localização ou número de série.");
         new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll).setNegativeButton("Cancelar", null)
                 .setPositiveButton("Aplicar", (d,w) -> {
                     boolean rebind = settings.detail != detail.isChecked() || settings.mirror != mirror.isChecked()
                             || settings.highBitrate != high.isChecked() || settings.videoHd != hd.isChecked()
-                            || settings.stabilization != stabilization.isChecked();
+                            || settings.stabilization != stabilization.isChecked()
+                            || settings.stableVideo != stable.isChecked() || settings.ultraHdr != hdr.isChecked();
                     settings.detail = detail.isChecked(); settings.mirror = mirror.isChecked(); settings.highBitrate = high.isChecked();
                     settings.videoHd = hd.isChecked(); settings.sound = audio.isChecked(); settings.stabilization = stabilization.isChecked();
+                    settings.stableVideo = stable.isChecked(); settings.ultraHdr = hdr.isChecked();
+                    settings.lowLight = lowLight.isChecked(); settings.smartExposure = smart.isChecked();
                     settings.grid = grid.isChecked(); settings.level = horizon.isChecked(); settings.save(preferences); applyOverlay();
-                    if (rebind) engine.bind(); else refresh();
+                    if (rebind) engine.bind(); else { engine.applyControls(); refresh(); }
                 }).show();
     }
 

@@ -25,10 +25,16 @@ jobs:
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Test, lint and build
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug :app:assembleRelease
       - uses: actions/upload-artifact@v4
         with:
           name: Luma-A17-debug
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Luma-A17-release-unsigned
+          path: app/build/outputs/apk/release/*unsigned.apk
           if-no-files-found: error
           retention-days: 30
