@@ -19,6 +19,7 @@ import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.framework.image.ByteBufferExtractor;
 import com.google.mediapipe.framework.image.MPImage;
 import com.google.mediapipe.tasks.core.BaseOptions;
+import com.google.mediapipe.tasks.core.Delegate;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter;
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenterResult;
@@ -232,7 +233,7 @@ final class LocalPhotoProcessor {
     /** Neural person-vs-background segmentation with GPU attempt and CPU fallback. */
     private static Bitmap personMask(Context context, Bitmap image, boolean gpu) throws Exception {
         BaseOptions options = BaseOptions.builder().setModelAssetPath(MODEL)
-                .setDelegate(gpu ? BaseOptions.Delegate.GPU : BaseOptions.Delegate.CPU).build();
+                .setDelegate(gpu ? Delegate.GPU : Delegate.CPU).build();
         ImageSegmenter.ImageSegmenterOptions config = ImageSegmenter.ImageSegmenterOptions.builder()
                 .setBaseOptions(options).setRunningMode(RunningMode.IMAGE)
                 .setOutputCategoryMask(false).setOutputConfidenceMasks(true).build();
