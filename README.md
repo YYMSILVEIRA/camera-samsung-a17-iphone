@@ -4,14 +4,26 @@ Aplicativo Android nativo de câmera, voltado ao Samsung Galaxy A17 **SM-A175F/D
 
 Esta é uma primeira versão funcional para teste no aparelho. **Não há promessa de qualidade igual à de um iPhone ou superior à câmera Samsung.** Não foi feita calibração de imagem em um A17 físico. O processamento proprietário da Apple não é transferível, e fabricantes podem reservar recursos para seu próprio aplicativo. Megapixels sozinhos não determinam qualidade.
 
+## Melhorias da versão 1.1.0
+
+- Fotografia em JPEG 97% ou 100% e maior resolução realmente exposta pela câmera. JPEG 100% gera arquivos maiores sem criar detalhes reais.
+- Opção **Ultra HDR JPEG/R**, apenas se a lente declarar suporte; quando incompatível, volta para JPEG convencional. Ultra HDR não é HEIC.
+- Vídeo na maior resolução real anunciada por lente (ou 720p opcional); bitrate de 16, 24 ou alvo de até 32 Mb/s para FHD. O dispositivo pode limitar a codificação. O Galaxy A17 4G anuncia Full HD 30 fps; NÃO há 4K fictício.
+- **Gemini pós-captura para fotos**: botão manual ou envio automático por escolha explícita (desligado de fábrica). Envia a foto ao serviço Google, produz uma cópia em `DCIM/LumaA17/IA` e mantém o JPEG original inalterado.
+- A API key do usuário é digitada nos ajustes e guardada cifrada via Android Keystore, nunca no repositório. Para usar, obtenha uma **chave de API válida do Google AI Studio** com acesso ao modelo `gemini-2.5-flash-image`. Tokens de autenticação de outros sistemas podem não funcionar. O envio pode consumir cota ou gerar cobrança.
+- A IA generativa pode alterar detalhes, aparência e resolução da foto. **Não é restauração sem perdas de informação captada pelo sensor.** O resultado precisa ser conferido visualmente.
+- A IA não é executada durante captura ou gravação. Não são enviados vídeos ao Gemini; isso não aperfeiçoaria automaticamente a cadeia de codificação, e edição quadro a quadro não garante continuidade temporal.
+- **HEIC/HEIF e vídeo H.265/HEVC não estão implementados** neste build; as fotos originais continuam JPEG e vídeos MP4 com codec selecionado pelo CameraX 1.5.3. Não renomeie extensão para fingir outro codec. HEIC/HEVC são formas de compressão mais eficientes, não garantia de mais detalhes.
+- Requer internet **somente para a função Gemini**. Sem configuração/consentimento, fotos e vídeos ficam locais.
+
 ## Captura
 
 - CameraX 1.5.3 sobre Camera2, com apenas prévia + foto **ou** prévia + vídeo ativos por vez.
 - Câmeras frontal, principal e outras lentes que o Android efetivamente expuser. IDs não são presumidos.
-- JPEG 97%, captura com prioridade à qualidade e resolução próxima de 12 MP por padrão. Opção de maior resolução exposta pelo aparelho; não promete acesso aos 50 MP completos.
+- JPEG 97% por padrão (100% opcional), captura com prioridade à qualidade e resolução próxima de 12 MP por padrão. Opção de maior resolução exposta pelo aparelho; não promete acesso aos 50 MP completos.
 - Redução de ruído de alta qualidade solicitada para fotos; processamento rápido solicitado para vídeo, quando o HAL declara suporte. O fabricante ainda decide o processamento final.
 - HDR e Noite usam extensões do fabricante e só aparecem para lentes compatíveis. Sem extensões, a captura normal permanece disponível. Não há HDR multiquadro próprio nem emulação de Deep Fusion/Smart HDR.
-- Vídeo prioriza Full HD, alvo de 30 fps quando o intervalo fixo é anunciado, com 16 ou 24 Mb/s solicitados. Perfil alternativo 720p e fallback de compatibilidade. O codificador pode ajustar a taxa; não há upscaling, 4K fictício ou promessa de 60 fps.
+- Vídeo prioriza Full HD, alvo de 30 fps quando o intervalo fixo é anunciado, com 16, 24 ou 32 Mb/s solicitados. Perfil alternativo 720p e fallback de compatibilidade. O codificador pode ajustar a taxa; não há upscaling, 4K fictício ou promessa de 60 fps.
 - OIS quando exposto pela lente; vídeo usa EIS compatível quando não há OIS. Nunca força OIS e EIS simultaneamente. Não há estabilização de software própria.
 - Toque para foco/exposição, pressão longa para trava, compensação EV e zoom por pinça. A frontal do A17 tem foco fixo; tocar ajusta medição, não movimenta uma lente inexistente.
 - Balanço de branco, anti-banding (60 Hz por padrão), foco manual e ISO/obturador em fotos, somente quando suportados. Controles manuais não interferem nas extensões HDR/Noite.
@@ -22,7 +34,7 @@ Os ajustes Camera2 são solicitações ao fabricante, não garantia de imagem me
 
 ## Privacidade
 
-O manifesto solicita apenas câmera e microfone. Microfone é pedido ao tentar gravar com som. Não há permissão de internet, root, localização, leitura ampla da galeria, telemetria, anúncios ou serviços em segundo plano. A gravação é encerrada quando o aplicativo sai do primeiro plano. Arquivos criados pelo aplicativo usam MediaStore; a última captura pode ser aberta no visualizador escolhido no Android. O diagnóstico não contém mídias, número de série ou contas.
+O manifesto solicita câmera, microfone e internet. A internet é usada somente na edição Gemini de fotos, que é opcional e desativada por padrão. Microfone é pedido ao tentar gravar com som. Não há root, localização, leitura ampla da galeria, telemetria, anúncios ou serviços em segundo plano. A gravação é encerrada quando o aplicativo sai do primeiro plano. Arquivos criados pelo aplicativo usam MediaStore; a última captura pode ser aberta no visualizador escolhido no Android. O diagnóstico não contém mídias, número de série ou contas.
 
 ## Compilação
 
