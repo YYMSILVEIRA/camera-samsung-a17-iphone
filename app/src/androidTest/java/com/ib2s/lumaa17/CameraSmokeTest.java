@@ -34,7 +34,8 @@ public class CameraSmokeTest {
         device.findObject(By.desc("Abrir a última foto ou vídeo")).click();
         assertTrue(device.wait(Until.hasObject(By.text("PNG")),15000));
         device.findObject(By.text("PNG")).click();
-        device.findObject(By.text("Salvar PNG")).click();
+        UiObject2 confirm = device.wait(Until.findObject(By.res("android:id/button1")),15000);
+        assertNotNull(confirm); confirm.click();
         assertTrue(device.wait(Until.hasObject(By.text("PNG SDR salvo · mesma resolução do original")),45000));
         assertTrue(device.takeScreenshot(new java.io.File(context.getExternalFilesDir(null), "photo-review.png")));
         device.findObject(By.text("Voltar à câmera")).click();
