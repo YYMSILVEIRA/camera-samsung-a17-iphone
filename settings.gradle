@@ -9,6 +9,7 @@ dependencyResolutionManagement {
                 includeGroupByRegex 'com\\.google\\.android.*'
                 includeGroupByRegex 'com\\.google\\.testing.*'
                 includeGroupByRegex 'com\\.google\\.test.*'
+                includeGroupByRegex 'com\\.google\\.mediapipe.*'
             }
         }
         mavenCentral()
