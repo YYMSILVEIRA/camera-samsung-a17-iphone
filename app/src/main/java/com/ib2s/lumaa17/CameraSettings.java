@@ -13,6 +13,8 @@ public final class CameraSettings {
     public int localPreset = 1, portraitBlur = 1;
     public boolean portraitMode, localAutomatic = true, reviewAfterCapture = true;
     public boolean fullscreenPreview = true, brighterExposure = true;
+    public boolean iphoneAutomatic = true;
+    public int iphoneProfile = 1;
     public int extension = ExtensionMode.NONE;
     public int timerSeconds, flash = ImageCapture.FLASH_MODE_OFF;
     public int whiteBalance = CaptureRequest.CONTROL_AWB_MODE_AUTO;
@@ -43,6 +45,8 @@ public final class CameraSettings {
         localPreset = Math.max(0, Math.min(3, p.getInt("localPreset", 1)));
         portraitBlur = Math.max(1, Math.min(2, p.getInt("portraitBlur", 1)));
         localAutomatic = p.getBoolean("localAutomatic", false);
+        iphoneAutomatic = p.getBoolean("iphoneAutomatic", true);
+        iphoneProfile = Math.max(0,Math.min(2,p.getInt("iphoneProfile", 1)));
         reviewAfterCapture = p.getBoolean("reviewAfterCapture", true);
         fullscreenPreview = p.getBoolean("fullscreenPreview", true);
         brighterExposure = p.getBoolean("brighterExposure", true);
@@ -62,6 +66,7 @@ public final class CameraSettings {
                 .putInt("portraitBlur", portraitBlur)
                 .putBoolean("localAutomatic", localAutomatic)
                 .putBoolean("reviewAfterCapture", reviewAfterCapture)
+                .putBoolean("iphoneAutomatic", iphoneAutomatic).putInt("iphoneProfile", iphoneProfile)
                 .putBoolean("fullscreenPreview", fullscreenPreview)
                 .putBoolean("brighterExposure", brighterExposure).apply();
     }

@@ -4,6 +4,16 @@ Aplicativo Android nativo de câmera, voltado ao Samsung Galaxy A17 **SM-A175F/D
 
 Esta é uma primeira versão funcional para teste no aparelho. **Não há promessa de qualidade igual à de um iPhone ou superior à câmera Samsung.** Não foi feita calibração de imagem em um A17 físico. O processamento proprietário da Apple não é transferível, e fabricantes podem reservar recursos para seu próprio aplicativo. Megapixels sozinhos não determinam qualidade.
 
+## Luma A17 1.5.0 — Estilo iPhone Local para fotografias
+
+- **Estilo iPhone Local** com três perfis: Natural, Padrão e Noturno. Não é código ou LUT da Apple e não faz acesso ao ISP proprietário; inspira-se em características visuais do processamento de câmera de smartphone.
+- Tratamento **100% offline** por fotografia: histograma de iluminação, curva monotônica para preservar contraste, realce limitado de sombras, redução de altas luzes, equilíbrio de branco ligeiramente quente, saturação moderada, redução de ruído de crominância e luminância com pesos guiados por borda, proteção aproximada de tons de pele e microcontraste controlado.
+- **Original intacto em DCIM/LumaA17.** Resultado novo em `DCIM/LumaA17/EstiloIPhone`; JPEG codificado em qualidade 98, sem adicionar redimensionamento para fotos até 4608 px no lado maior. O processamento trabalha linha a linha para evitar criar vários bitmaps gigantes ao mesmo tempo.
+- **Automático após tirar foto (padrão)** com porcentagem e exibição do antes/depois. Em modo Retrato, a rotina neural de separação de fundo continua prioritária; ao desativar o automático, a revisão oferece Estilo iPhone manual. Segure a miniatura da galeria para abrir as opções de revisão da última foto.
+- Para outras opções, há super-resolução EDSR x4 em menu próprio, sob demanda. Não aumentamos indiscriminadamente a resolução de imagens já detalhadas, para evitar artefatos e economizar memória/bateria.
+- **Limites físicos:** os pixels que faltam e partes desfocadas não podem ser restaurados perfeitamente, fotos noturnas muito escuras podem continuar com ruído, e realce local de sombras não equivale a HDR de múltiplas exposições. O estilo local desta versão usa filtros eficientes executados em CPU, não uma rede neural de redução de ruído em GPU.
+- Ajustes manuais de brilho/contraste já disponíveis continuam ativos. Sem root, sem token, sem envio de fotografias ao Google pelo estilo local.
+
 ## Luma A17 1.4.0 — super-resolução neural e comparação visível
 
 - **Novo EDSR x4 offline real**, com modelo [EDSR-x4-LiteRT](https://huggingface.co/litert-community/EDSR-x4-LiteRT), licença Apache-2.0. Aceleração pela GPU, com fallback CPU; inferência executada em blocos 128×128 (bordas sobrepostas) para limitar memória.

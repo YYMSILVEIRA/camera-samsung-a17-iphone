@@ -262,6 +262,10 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         thumbnail = new ImageView(this); thumbnail.setContentDescription("Abrir a última foto ou vídeo");
         thumbnail.setImageResource(R.drawable.ic_luma); thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
         thumbnail.setBackground(pill(PANEL, 14)); thumbnail.setClipToOutline(true); thumbnail.setOnClickListener(v -> openLast());
+        thumbnail.setOnLongClickListener(v -> {
+            if(lastOriginalUri==null) {toast("Tire uma foto antes de abrir as opções.");return true;}
+            showReview(lastOriginalUri);return true;
+        });
         FrameLayout thumbBox = new FrameLayout(this);
         FrameLayout.LayoutParams thumbParams = new FrameLayout.LayoutParams(dp(52), dp(52), Gravity.CENTER);
         thumbBox.addView(thumbnail, thumbParams); captureRow.addView(thumbBox, weighted(dp(92)));
@@ -445,19 +449,21 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
             } catch (Exception ignored) { /* A successful capture must not depend on its thumbnail. */ }
         });
         if (!video) {
-            if (settings.localAutomatic || settings.portraitMode)
-                processLocal(uri, settings.localAutomatic ? settings.localPreset : 0,
-                        settings.portraitMode, false);
-            if (settings.reviewAfterCapture) showReview(uri);
-            if (settings.geminiAutomatic) improvePhoto(uri, false);
+            boolean automatic = settings.portraitMode || settings.iphoneAutomatic || settings.localAutomatic;
+            if(settings.portraitMode) processLocal(uri,settings.localPreset,true,false);
+            else if(settings.iphoneAutomatic) processIphone(uri,settings.iphoneProfile);
+            else if(settings.localAutomatic) processLocal(uri,settings.localPreset,false,false);
+            if(settings.reviewAfterCapture && !automatic) showReview(uri);
+            if(settings.geminiAutomatic) improvePhoto(uri,false);
         }
         refresh();
     }
 
     private void showReview(Uri original) {
-        String[] actions = {"Ver foto original", "Super-resolução neural EDSR ×4 (offline)",
-                "Melhorar tons / ruído / nitidez", "Retrato IA · fundo desfocado",
-                "Salvar cópia PNG", "Salvar cópia HEIC", "Editar cópia no Gemini"};
+        String[] actions = {"Ver foto original", "Estilo iPhone Local (cores / redução de ruído)",
+                "Super-resolução neural EDSR ×4", "Ajuste de cor tradicional",
+                "Retrato IA · fundo desfocado", "Salvar cópia PNG", "Salvar cópia HEIC",
+                "Editar cópia no Gemini"};
         new AlertDialog.Builder(this).setTitle("Revisar fotografia")
             .setItems(actions, (dialog, which) -> {
                 switch (which) {
@@ -468,12 +474,13 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
                         } catch (ActivityNotFoundException ex) { toast("Abra a galeria para visualizar a foto."); }
                         break;
-                    case 1: startSuperResolution(original); break;
-                    case 2: processLocal(original, Math.max(1, settings.localPreset), false, false); break;
-                    case 3: processLocal(original, settings.localPreset, true, false); break;
-                    case 4: processLocal(original, 0, false, true); break;
-                    case 5: exportHeic(original); break;
-                    case 6: improvePhoto(original,true); break;
+                    case 1: pickIphoneProfile(original); break;
+                    case 2: startSuperResolution(original); break;
+                    case 3: processLocal(original, Math.max(1, settings.localPreset), false, false); break;
+                    case 4: processLocal(original, settings.localPreset, true, false); break;
+                    case 5: processLocal(original, 0, false, true); break;
+                    case 6: exportHeic(original); break;
+                    case 7: improvePhoto(original,true); break;
                     default: break;
                 }
             }).setNegativeButton("Voltar à câmera", null).show();
@@ -509,6 +516,50 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
             } catch(Exception ignored) {}
         });
         PhotoResultDialog.show(this,files,original,processed,message);
+    }
+
+    private void pickIphoneProfile(Uri original) {
+        String[] presets={"Natural · textura original","Padrão · cores equilibradas","Noturno · ruído reduzido"};
+        new AlertDialog.Builder(this).setTitle("Estilo iPhone · offline")
+            .setItems(presets,(d,which)->processIphone(original,which))
+            .setNegativeButton("Cancelar",null).show();
+    }
+
+    private void processIphone(Uri original,int profile) {
+        if(localInProgress) {
+            toast("Outra foto está sendo processada. O original foi salvo.");
+            return;
+        }
+        localInProgress=true;
+        showProcessing(0,"Preparando estilo iPhone offline");
+        files.execute(()->{
+            try {
+                IphoneLookProcessor.Result result=IphoneLookProcessor.process(
+                        getApplicationContext(),original,profile,this::showProcessing);
+                runOnUiThread(()->{
+                    localInProgress=false;
+                    if(destroyed)return;
+                    finishProcessing();
+                    status.setText("Estilo iPhone "+IphoneLookProcessor.profileName(profile)
+                            +" salvo · "+result.width+"×"+result.height);
+                    showProcessed(original,result.uri,result.details);
+                });
+            } catch(Throwable error) {
+                android.util.Log.e("LumaIphoneLook","Local photo processing failed",error);
+                runOnUiThread(()->{
+                    localInProgress=false;
+                    if(destroyed)return;
+                    finishProcessing();
+                    String reason=error instanceof OutOfMemoryError
+                            ? "Memória insuficiente para melhorar a foto. Aumente o espaço livre e tente novamente."
+                            : error.getMessage()==null?"Falha no processamento local.":error.getMessage();
+                    status.setText("Falha no Estilo iPhone · original preservado");
+                    new AlertDialog.Builder(this).setTitle("Falha no processamento offline")
+                        .setMessage(reason+"\n\nA fotografia original permanece na galeria.")
+                        .setPositiveButton("Entendi",null).show();
+                });
+            }
+        });
     }
 
     private void startSuperResolution(Uri original) {
@@ -780,6 +831,21 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         hint(box, "JPEG/R com ganho HDR em telas e câmeras suportadas; caso contrário, JPEG padrão.");
         CheckBox mirror = check(box, "Salvar selfie espelhada", settings.mirror);
 
+        section(box, "ESTILO IPHONE LOCAL · FOTOS");
+        hint(box, "Processamento offline que aproxima tons naturais, contraste moderado, cor ligeiramente quente e boa textura. Reduz ruído de cor e de brilho com preservação de bordas. Não é o algoritmo proprietário da Apple, nem recupera detalhes inexistentes.");
+        String[] iphoneNames={"Natural (menos intervenção)", "Padrão (cores e nitidez equilibradas)",
+                "Noturno (redução de ruído mais forte)"};
+        Spinner iphoneLevel=new Spinner(this);
+        iphoneLevel.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,iphoneNames));
+        iphoneLevel.setSelection(settings.iphoneProfile);
+        box.addView(iphoneLevel,new LinearLayout.LayoutParams(-1,dp(52)));
+        CheckBox iphoneAuto=check(box,"Aplicar automaticamente após capturar (salva cópia)",settings.iphoneAutomatic);
+        hint(box,"Ativado por padrão. O JPEG original é preservado. Resultado aparece dentro do app e na galeria; processar fotos de 12 MP pode demorar alguns segundos. Não é necessário internet.");
+        if(lastOriginalUri!=null){
+            Button iphoneLast=button("Aplicar estilo iPhone à última foto",
+                    "Processar cópia local para comparar antes e depois",v -> processIphone(lastOriginalUri,iphoneLevel.getSelectedItemPosition()));
+            box.addView(iphoneLast,new LinearLayout.LayoutParams(-1,dp(60)));
+        }
         section(box, "IA LOCAL E REVISÃO (FUNCIONA SEM INTERNET)");
         hint(box, "Super-resolução EDSR ×4 offline aumenta pixels por rede neural (GPU/CPU). Retrato usa MediaPipe. Filtros de cor, ruído e nitidez não são super-resolução. A IA pode estimar detalhes que não estavam na foto.");
         String[] localNames = {"Desligado", "Natural (suave)", "Equilibrado", "Máximo"};
@@ -890,7 +956,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox grid = check(box, "Grade de composição", settings.grid);
         CheckBox horizon = check(box, "Nível do horizonte", settings.level);
         section(box, "SOBRE ESTA VERSÃO");
-        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · JPEG original em resolução máxima disponível, cópias locais PNG/JPEG, retrato MediaPipe offline (GPU/CPU) e Gemini opcional. HEIC pode ser exportado como cópia via codec do Android. HEVC de vídeo e fusão simultânea de câmeras não são suportados.");
+        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Estilo iPhone Local com cores e redução de ruído (CPU); retrato MediaPipe GPU/CPU; EDSR neural para ampliação opcional. JPEG original preservado. Sem cópia do ISP Apple; sem HEVC de vídeo nem fusão de câmeras.");
         Button diagnostics = button("Salvar diagnóstico de câmera", "Salvar capacidades disponíveis em arquivo", v -> saveDiagnostic());
         box.addView(diagnostics);
         new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll)
@@ -921,6 +987,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                 boolean exposureChanged = settings.brighterExposure != bright.isChecked();
                 settings.fullscreenPreview = fullPreview.isChecked();
                 settings.brighterExposure = bright.isChecked();
+                settings.iphoneProfile = iphoneLevel.getSelectedItemPosition();
+                settings.iphoneAutomatic = iphoneAuto.isChecked();
                 settings.localPreset = localLevel.getSelectedItemPosition();
                 settings.portraitBlur = blurLevel.getSelectedItemPosition() + 1;
                 settings.localAutomatic = localAuto.isChecked() && settings.localPreset > 0;

@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -43,6 +43,10 @@ jobs:
               assert f.read(8)[4:8] == b'TFL3', 'EDSR asset is not a TFLite model'
           PY
           sha256sum app/src/main/assets/edsr.tflite
+      - name: Verify offline ISP pipeline source exists
+        run: |
+          test -s app/src/main/java/com/ib2s/lumaa17/IphoneLookProcessor.java
+          test -s app/src/main/java/com/ib2s/lumaa17/IphoneColorMath.java
       - name: Test, lint and build
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
       - uses: actions/upload-artifact@v4
@@ -55,14 +59,14 @@ jobs:
       - name: Prepare downloadable APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.4.0-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.5.0-debug.apk
       - name: Publish APK in prerelease
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v1.4.0-debug >/dev/null 2>&1; then
-            gh release upload v1.4.0-debug Luma-A17-v1.4.0-debug.apk --clobber
+          if gh release view v1.5.0-debug >/dev/null 2>&1; then
+            gh release upload v1.5.0-debug Luma-A17-v1.5.0-debug.apk --clobber
           else
-            gh release create v1.4.0-debug Luma-A17-v1.4.0-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.4.0 · IA offline (APK teste)" --notes "Modelo local MediaPipe incluso; retrato offline GPU/CPU; JPEG original preservado; revisão pós-captura PNG/Gemini. Teste em SM-A175F. APK debug pode precisar desinstalar a versão anterior devido à assinatura diferente." --prerelease
+            gh release create v1.5.0-debug Luma-A17-v1.5.0-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.5.0 · IA offline (APK teste)" --notes "Modelo local MediaPipe incluso; retrato offline GPU/CPU; JPEG original preservado; revisão pós-captura PNG/Gemini. Teste em SM-A175F. APK debug pode precisar desinstalar a versão anterior devido à assinatura diferente." --prerelease
           fi
