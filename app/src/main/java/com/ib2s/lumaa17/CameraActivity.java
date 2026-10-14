@@ -441,7 +441,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
 
     private void showReview(Uri original) {
         String[] actions = {"Ver foto original", "Melhorar offline · tons, ruído e nitidez",
-                "Retrato IA · fundo desfocado", "Salvar cópia PNG", "Editar cópia no Gemini"};
+                "Retrato IA · fundo desfocado", "Salvar cópia PNG", "Salvar cópia HEIC", "Editar cópia no Gemini"};
         new AlertDialog.Builder(this).setTitle("Revisar fotografia")
             .setItems(actions, (dialog, which) -> {
                 switch (which) {
@@ -455,7 +455,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                     case 1: processLocal(original, Math.max(1, settings.localPreset), false, false); break;
                     case 2: processLocal(original, settings.localPreset, true, false); break;
                     case 3: processLocal(original, 0, false, true); break;
-                    case 4: improvePhoto(original,true); break;
+                    case 4: exportHeic(original); break;
+                    case 5: improvePhoto(original,true); break;
                     default: break;
                 }
             }).setNegativeButton("Voltar à câmera", null).show();
@@ -501,6 +502,44 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                                 : "Falha no processamento local. Verifique o modelo e espaço disponível.";
                         status.setText(reason + " Original preservado.");
                         toast(reason);
+                    }
+                });
+            }
+        });
+    }
+
+    /** Re-encode a local copy as HEIC; original remains JPEG. */
+    private void exportHeic(Uri original) {
+        if (localInProgress) { toast("Aguarde o processamento local atual."); return; }
+        localInProgress = true;
+        status.setText("Exportando HEIC offline…");
+        files.execute(() -> {
+            try {
+                Uri result = HeicPhotoExporter.export(getApplicationContext(), original);
+                runOnUiThread(() -> {
+                    localInProgress = false;
+                    if (destroyed) return;
+                    status.setText("Cópia HEIC salva · JPEG original preservado.");
+                    if (original.equals(lastOriginalUri)) {
+                        lastUri = result; lastVideo = false;
+                        files.execute(() -> {
+                            try {
+                                Bitmap img = getContentResolver().loadThumbnail(result,new Size(150,150),null);
+                                runOnUiThread(() -> {
+                                    if (!destroyed && result.equals(lastUri)) thumbnail.setImageBitmap(img);
+                                });
+                            } catch(Exception ignored) {}
+                        });
+                    }
+                    toast("Cópia HEIC na galeria.");
+                });
+            } catch(Throwable error) {
+                android.util.Log.w("LumaHeic","HEIC export unavailable",error);
+                runOnUiThread(() -> {
+                    localInProgress = false;
+                    if(!destroyed) {
+                        status.setText("Codificador HEIC indisponível. JPEG original preservado.");
+                        toast("HEIC não pôde ser exportado neste aparelho.");
                     }
                 });
             }
@@ -628,7 +667,12 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
     private void openLast() {
         if (lastUri == null) { toast("Suas capturas aparecerão aqui e na galeria."); return; }
-        try { startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(lastUri, lastVideo ? "video/mp4" : "image/jpeg").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)); }
+        try {
+            String mime = getContentResolver().getType(lastUri);
+            if (mime == null || mime.isEmpty()) mime = lastVideo ? "video/mp4" : "image/jpeg";
+            startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(lastUri,mime)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        }
         catch (ActivityNotFoundException ex) { toast("Abra a galeria para ver sua captura."); }
     }
 
@@ -673,6 +717,9 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                     processLocal(lastOriginalUri,settings.localPreset,true,false));
             box.addView(localLast,new LinearLayout.LayoutParams(-1,dp(55)));
             box.addView(portraitLast,new LinearLayout.LayoutParams(-1,dp(55)));
+            Button heicLast = button("Exportar última foto HEIC", "Converter uma cópia da última foto para HEIC", v ->
+                    exportHeic(lastOriginalUri));
+            box.addView(heicLast,new LinearLayout.LayoutParams(-1,dp(55)));
         }
 
         section(box, "VÍDEO");
@@ -755,7 +802,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox grid = check(box, "Grade de composição", settings.grid);
         CheckBox horizon = check(box, "Nível do horizonte", settings.level);
         section(box, "SOBRE ESTA VERSÃO");
-        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · JPEG original em resolução máxima disponível, cópias locais PNG/JPEG, retrato MediaPipe offline (GPU/CPU) e Gemini opcional. HEIC/HEVC e fusão simultânea de câmeras não são suportados.");
+        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · JPEG original em resolução máxima disponível, cópias locais PNG/JPEG, retrato MediaPipe offline (GPU/CPU) e Gemini opcional. HEIC pode ser exportado como cópia via codec do Android. HEVC de vídeo e fusão simultânea de câmeras não são suportados.");
         Button diagnostics = button("Salvar diagnóstico de câmera", "Salvar capacidades disponíveis em arquivo", v -> saveDiagnostic());
         box.addView(diagnostics);
         new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll)
