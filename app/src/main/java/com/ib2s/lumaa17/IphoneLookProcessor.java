@@ -61,6 +61,7 @@ final class IphoneLookProcessor {
             progress.onProgress(12,"Processando cores e ruído local");
             output=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
             int[] previous=new int[width],current=new int[width],next=new int[width],processed=new int[width];
+            int[] neighbours=new int[8];
             source.getPixels(current,0,width,0,0,width,1);
             System.arraycopy(current,0,previous,0,width);
             if(height>1)source.getPixels(next,0,width,0,1,width,1);
@@ -79,10 +80,9 @@ final class IphoneLookProcessor {
                     int sumR=r*12,sumG=g*12,sumB=b*12,weight=12;
                     int left=Math.max(0,x-1),right=Math.min(width-1,x+1);
                     // Neighbour confidence protects both luminance and colored boundaries.
-                    int[] neighbours={
-                        previous[left],previous[x],previous[right],
-                        current[left],current[right],
-                        next[left],next[x],next[right]};
+                    neighbours[0]=previous[left];neighbours[1]=previous[x];neighbours[2]=previous[right];
+                    neighbours[3]=current[left];neighbours[4]=current[right];
+                    neighbours[5]=next[left];neighbours[6]=next[x];neighbours[7]=next[right];
                     for(int pixel:neighbours){
                         int nr=Color.red(pixel),ng=Color.green(pixel),nb=Color.blue(pixel);
                         int nl=IphoneColorMath.luma(nr,ng,nb);
