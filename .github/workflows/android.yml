@@ -24,6 +24,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Bundle offline portrait AI model
+        run: |
+          mkdir -p app/src/main/assets
+          curl --fail --location --show-error --silent --retry 3 \
+            'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite' \
+            --output app/src/main/assets/selfie_segmenter.tflite
+          test "$(stat -c %s app/src/main/assets/selfie_segmenter.tflite)" -gt 100000
+          sha256sum app/src/main/assets/selfie_segmenter.tflite
       - name: Test, lint and build
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
       - uses: actions/upload-artifact@v4
@@ -36,10 +44,14 @@ jobs:
       - name: Prepare downloadable APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.1.1-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk Luma-A17-v1.3.0-debug.apk
       - name: Publish APK in prerelease
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v1.1.1-debug Luma-A17-v1.1.1-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.1.1 (APK teste)" --notes "Compilação Android automática com opções de qualidade e Gemini opcional. APK debug; se houver conflito de assinatura com teste anterior, desinstale o APK antigo antes." --prerelease
+          if gh release view v1.3.0-debug >/dev/null 2>&1; then
+            gh release upload v1.3.0-debug Luma-A17-v1.3.0-debug.apk --clobber
+          else
+            gh release create v1.3.0-debug Luma-A17-v1.3.0-debug.apk --target "${GITHUB_SHA}" --title "Luma A17 1.3.0 · IA offline (APK teste)" --notes "Modelo local MediaPipe incluso; retrato offline GPU/CPU; JPEG original preservado; revisão pós-captura PNG/Gemini. Teste em SM-A175F. APK debug pode precisar desinstalar a versão anterior devido à assinatura diferente." --prerelease
+          fi

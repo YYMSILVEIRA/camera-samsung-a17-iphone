@@ -92,7 +92,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     private Uri lastUri;
     private boolean lastVideo, torchOn, updatingUi, destroyed, scaleActive;
     private String reportToSave;
-    private volatile boolean geminiInProgress;
+    private volatile boolean geminiInProgress, localInProgress;
+    private Uri lastOriginalUri;
     private float roll;
     private float touchFocusX = Float.NaN, touchFocusY = Float.NaN;
     private final ExecutorService files = Executors.newSingleThreadExecutor();
@@ -106,6 +107,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         buildUi();
+        applyImmersive();
         engine = new CameraEngine(this, this, preview, settings, this);
         setupGestures();
         orientation = new OrientationEventListener(this) {
@@ -183,7 +185,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         session = text("Preparando câmera…", 11, MUTED); session.setGravity(Gravity.CENTER); session.setMaxLines(1);
         previewFrame = new PreviewFrame();
         preview = new PreviewView(this); preview.setImplementationMode(PreviewView.ImplementationMode.PERFORMANCE);
-        preview.setScaleType(PreviewView.ScaleType.FIT_CENTER);
+        preview.setScaleType(settings.fullscreenPreview ? PreviewView.ScaleType.FILL_CENTER : PreviewView.ScaleType.FIT_CENTER);
         preview.setContentDescription("Visor da câmera. Toque para foco e exposição; mantenha pressionado para travar; use dois dedos para zoom.");
         overlay = new CameraOverlay(this); applyOverlay();
         previewFrame.addView(preview); previewFrame.addView(overlay);
@@ -326,7 +328,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
     private void switchMode(boolean video, int extension) {
         if (!available() || engine.isRecording() || timer != null) return;
-        settings.video = video; settings.extension = extension; settings.manualExposure = false;
+        settings.video = video; settings.extension = extension; settings.portraitMode = false; settings.manualExposure = false;
         settings.focusDistance = -1; settings.lock = false; torchOn = false;
         overlay.locked = false; overlay.invalidate();
         if (extension != ExtensionMode.NONE) { settings.whiteBalance = CaptureRequest.CONTROL_AWB_MODE_AUTO; settings.ev = 0; }
@@ -335,17 +337,32 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     private void renderModes() {
         modes.removeAllViews();
         modeButton("FOTO", false, ExtensionMode.NONE);
+        Button portrait = button("RETRATO", "Modo retrato local offline com segmentação por IA", v -> switchPortrait());
+        boolean chosenPortrait = settings.portraitMode && !settings.video;
+        portrait.setTextColor(chosenPortrait ? GOLD : MUTED);
+        portrait.setTypeface(Typeface.DEFAULT, chosenPortrait ? Typeface.BOLD : Typeface.NORMAL);
+        portrait.setBackground(pill(chosenPortrait ? PANEL : BG, 20));
+        portrait.setEnabled(engine == null || (!engine.isBusy() && !engine.isRecording() && timer == null));
+        modes.addView(portrait, new LinearLayout.LayoutParams(dp(100), dp(46)));
         modeButton("VÍDEO", true, ExtensionMode.NONE);
         if (engine != null && engine.extensionAvailable(ExtensionMode.HDR)) modeButton("HDR", false, ExtensionMode.HDR);
         if (engine != null && engine.extensionAvailable(ExtensionMode.NIGHT)) modeButton("NOITE", false, ExtensionMode.NIGHT);
     }
     private void modeButton(String name, boolean video, int extension) {
         Button b = button(name, "Modo " + name, v -> switchMode(video, extension));
-        boolean selected = settings.video == video && (video || settings.extension == extension);
+        boolean selected = settings.video == video && (video || (!settings.portraitMode && settings.extension == extension));
         b.setTextColor(selected ? GOLD : MUTED); b.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
         b.setBackground(pill(selected ? PANEL : BG, 20));
         b.setEnabled(engine == null || (!engine.isBusy() && !engine.isRecording() && timer == null));
         modes.addView(b, new LinearLayout.LayoutParams(dp(80), dp(46)));
+    }
+
+    private void switchPortrait() {
+        if (!canChange()) return;
+        settings.video = false; settings.extension = ExtensionMode.NONE;
+        settings.portraitMode = true; settings.manualExposure = false;
+        torchOn = false;
+        engine.bind(); renderModes();
     }
 
     private void flipCamera() {
@@ -403,7 +420,8 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     @Override public void onSaved(Uri uri, boolean video) {
         if (destroyed) return;
         lastUri = uri; lastVideo = video;
-        status.setText(video ? "Vídeo salvo na galeria" : "Foto salva na galeria");
+        if (!video) lastOriginalUri = uri;
+        status.setText(video ? "Vídeo salvo na galeria" : "Foto original salva na galeria");
         shutter.performHapticFeedback(android.os.Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.KEYBOARD_TAP);
         files.execute(() -> {
             try {
@@ -411,8 +429,96 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                 runOnUiThread(() -> { if (!destroyed && uri.equals(lastUri)) thumbnail.setImageBitmap(bitmap); });
             } catch (Exception ignored) { /* A successful capture must not depend on its thumbnail. */ }
         });
-        if (!video && settings.geminiAutomatic) improvePhoto(uri, false);
+        if (!video) {
+            if (settings.localAutomatic || settings.portraitMode)
+                processLocal(uri, settings.localAutomatic ? settings.localPreset : 0,
+                        settings.portraitMode, false);
+            if (settings.reviewAfterCapture) showReview(uri);
+            if (settings.geminiAutomatic) improvePhoto(uri, false);
+        }
         refresh();
+    }
+
+    private void showReview(Uri original) {
+        String[] actions = {"Ver foto original", "Melhorar offline · tons, ruído e nitidez",
+                "Retrato IA · fundo desfocado", "Salvar cópia PNG", "Editar cópia no Gemini"};
+        new AlertDialog.Builder(this).setTitle("Revisar fotografia")
+            .setItems(actions, (dialog, which) -> {
+                switch (which) {
+                    case 0:
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW)
+                                .setDataAndType(original,"image/jpeg")
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+                        } catch (ActivityNotFoundException ex) { toast("Abra a galeria para visualizar a foto."); }
+                        break;
+                    case 1: processLocal(original, Math.max(1, settings.localPreset), false, false); break;
+                    case 2: processLocal(original, settings.localPreset, true, false); break;
+                    case 3: processLocal(original, 0, false, true); break;
+                    case 4: improvePhoto(original,true); break;
+                    default: break;
+                }
+            }).setNegativeButton("Voltar à câmera", null).show();
+    }
+
+    /** CPU/GPU work runs on the worker; every result is a NEW MediaStore image. */
+    private void processLocal(Uri original, int preset, boolean portrait, boolean png) {
+        if (localInProgress) {
+            toast("Processamento local em andamento. Aguarde a conclusão.");
+            return;
+        }
+        localInProgress = true;
+        status.setText(portrait ? "IA local: criando retrato…" : "Processando cópia offline…");
+        final int blur = settings.portraitBlur;
+        files.execute(() -> {
+            try {
+                LocalPhotoProcessor.Result result = LocalPhotoProcessor.process(
+                        getApplicationContext(), original, preset, portrait, blur, png);
+                runOnUiThread(() -> {
+                    localInProgress = false;
+                    if (destroyed) return;
+                    status.setText(result.details);
+                    if (original.equals(lastOriginalUri)) {
+                        lastUri = result.uri; lastVideo = false;
+                        files.execute(() -> {
+                            try {
+                                Bitmap thumb = getContentResolver().loadThumbnail(result.uri, new Size(150,150),null);
+                                runOnUiThread(() -> {
+                                    if (!destroyed && result.uri.equals(lastUri)) thumbnail.setImageBitmap(thumb);
+                                });
+                            } catch (Exception ignored) {}
+                        });
+                    }
+                    toast("Cópia local salva. O JPEG original foi preservado.");
+                });
+            } catch (Throwable error) {
+                android.util.Log.e("LumaLocal", "Local processing failed", error);
+                runOnUiThread(() -> {
+                    localInProgress = false;
+                    if (!destroyed) {
+                        String reason = error instanceof OutOfMemoryError
+                                ? "Memória insuficiente. Desative processamento automático em Ajustes."
+                                : "Falha no processamento local. Verifique o modelo e espaço disponível.";
+                        status.setText(reason + " Original preservado.");
+                        toast(reason);
+                    }
+                });
+            }
+        });
+    }
+
+    private void applyImmersive() {
+        if (settings.fullscreenPreview) {
+            WindowCompat.getInsetsController(getWindow(),getWindow().getDecorView())
+                    .hide(WindowInsetsCompat.Type.systemBars());
+            WindowCompat.getInsetsController(getWindow(),getWindow().getDecorView())
+                    .setSystemBarsBehavior(androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        } else {
+            WindowCompat.getInsetsController(getWindow(),getWindow().getDecorView())
+                    .show(WindowInsetsCompat.Type.systemBars());
+        }
+        if (preview != null) preview.setScaleType(settings.fullscreenPreview
+                ? PreviewView.ScaleType.FILL_CENTER : PreviewView.ScaleType.FIT_CENTER);
     }
 
     /** Camera capture remains independent from optional cloud photo generation. */
@@ -533,6 +639,10 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         box.setPadding(dp(22), dp(6), dp(22), dp(12));
         scroll.addView(box);
         section(box, "FOTOGRAFIA");
+        CheckBox fullPreview = check(box, "Visor preenchendo a tela (como câmera nativa)", settings.fullscreenPreview);
+        hint(box, "O visor pode recortar as bordas para preencher o espaço; a foto salva mantém o enquadramento do sensor.");
+        CheckBox bright = check(box, "Exposição inicial +0,3 EV (clarear câmera)", settings.brighterExposure);
+        hint(box, "Padrão mais claro para o Galaxy A17; ajuste o controle EV no visor quando necessário.");
         CheckBox detail = check(box, "Maior resolução real disponível", settings.detail);
         hint(box, "Usa somente as resoluções disponibilizadas pelo Android. Fotos maiores levam mais tempo para processar.");
         CheckBox jpeg = check(box, "JPEG com qualidade 100 (arquivos maiores)", settings.jpegMaximum);
@@ -540,6 +650,30 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox hdr = check(box, "Ultra HDR JPEG, quando compatível", settings.ultraHdr);
         hint(box, "JPEG/R com ganho HDR em telas e câmeras suportadas; caso contrário, JPEG padrão.");
         CheckBox mirror = check(box, "Salvar selfie espelhada", settings.mirror);
+
+        section(box, "IA LOCAL E REVISÃO (FUNCIONA SEM INTERNET)");
+        hint(box, "Modelo de segmentação de pessoas incluído no APK. A IA tenta usar GPU e recorre à CPU se necessário. Os filtros de cor/ruído/nitidez usam processamento determinístico, não IA generativa.");
+        String[] localNames = {"Desligado", "Natural (suave)", "Equilibrado", "Máximo"};
+        Spinner localLevel = new Spinner(this);
+        localLevel.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, localNames));
+        localLevel.setSelection(settings.localPreset);
+        box.addView(localLevel,new LinearLayout.LayoutParams(-1,dp(52)));
+        CheckBox localAuto = check(box, "Melhorar fotos automaticamente em uma cópia local", settings.localAutomatic);
+        CheckBox review = check(box, "Mostrar opções Retrato, PNG e Gemini após a foto", settings.reviewAfterCapture);
+        String[] blurNames = {"Retrato: desfoque moderado", "Retrato: desfoque forte"};
+        Spinner blurLevel = new Spinner(this);
+        blurLevel.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,blurNames));
+        blurLevel.setSelection(settings.portraitBlur-1);
+        box.addView(blurLevel,new LinearLayout.LayoutParams(-1,dp(52)));
+        hint(box, "O original não é apagado. PNG preserva os pixels decodificados de JPEG, mas não recupera dados que já foram comprimidos. Retrato pode levar alguns segundos.");
+        if (lastOriginalUri != null) {
+            Button localLast = button("Melhorar última foto offline", "Processar original sem enviar ao Google", v ->
+                    processLocal(lastOriginalUri,Math.max(1,settings.localPreset),false,false));
+            Button portraitLast = button("Retrato IA da última foto", "Desfocar fundo via MediaPipe local", v ->
+                    processLocal(lastOriginalUri,settings.localPreset,true,false));
+            box.addView(localLast,new LinearLayout.LayoutParams(-1,dp(55)));
+            box.addView(portraitLast,new LinearLayout.LayoutParams(-1,dp(55)));
+        }
 
         section(box, "VÍDEO");
         CheckBox videoMax = check(box, "Maior resolução de vídeo disponível", settings.maximumVideoQuality);
@@ -621,7 +755,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
         CheckBox grid = check(box, "Grade de composição", settings.grid);
         CheckBox horizon = check(box, "Nível do horizonte", settings.level);
         section(box, "SOBRE ESTA VERSÃO");
-        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · Android sem root. Gemini 3.1 Flash Image gera uma cópia editada em até 2K; pode modificar detalhes. HEIC/HEVC não habilitados. Gemini é opcional e não recebe vídeos.");
+        hint(box, "Luma A17 " + BuildConfig.VERSION_NAME + " · JPEG original em resolução máxima disponível, cópias locais PNG/JPEG, retrato MediaPipe offline (GPU/CPU) e Gemini opcional. HEIC/HEVC e fusão simultânea de câmeras não são suportados.");
         Button diagnostics = button("Salvar diagnóstico de câmera", "Salvar capacidades disponíveis em arquivo", v -> saveDiagnostic());
         box.addView(diagnostics);
         new AlertDialog.Builder(this).setTitle("Ajustes").setView(scroll)
@@ -649,8 +783,17 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
                 settings.geminiAutomatic = automatic.isChecked() && !erase.isChecked() && savedKey;
                 settings.geminiStyle = style.getSelectedItemPosition();
                 settings.grid = grid.isChecked(); settings.level = horizon.isChecked();
+                boolean exposureChanged = settings.brighterExposure != bright.isChecked();
+                settings.fullscreenPreview = fullPreview.isChecked();
+                settings.brighterExposure = bright.isChecked();
+                settings.localPreset = localLevel.getSelectedItemPosition();
+                settings.portraitBlur = blurLevel.getSelectedItemPosition() + 1;
+                settings.localAutomatic = localAuto.isChecked() && settings.localPreset > 0;
+                settings.reviewAfterCapture = review.isChecked();
+                if (exposureChanged) settings.ev = settings.brighterExposure ? .33 : 0;
                 settings.save(preferences);
-                applyOverlay();
+                applyOverlay(); applyImmersive();
+                if (exposureChanged && !rebind) engine.applyControls();
                 if (rebind) engine.bind(); else refresh();
             }).show();
     }
@@ -729,6 +872,7 @@ public final class CameraActivity extends ComponentActivity implements CameraEng
     }
     @Override protected void onResume() {
         super.onResume();
+        applyImmersive();
         if (orientation != null && orientation.canDetectOrientation()) orientation.enable();
         if (gravitySensor != null) sensorManager.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_UI);
         if (engine != null && hasCamera() && engine.camera == null && !engine.isBusy()) engine.initialize();

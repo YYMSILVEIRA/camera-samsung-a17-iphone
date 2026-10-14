@@ -4,6 +4,28 @@ Aplicativo Android nativo de câmera, voltado ao Samsung Galaxy A17 **SM-A175F/D
 
 Esta é uma primeira versão funcional para teste no aparelho. **Não há promessa de qualidade igual à de um iPhone ou superior à câmera Samsung.** Não foi feita calibração de imagem em um A17 físico. O processamento proprietário da Apple não é transferível, e fabricantes podem reservar recursos para seu próprio aplicativo. Megapixels sozinhos não determinam qualidade.
 
+## Luma A17 1.3.0 · restauração do Work 1.2.0 + IA local
+
+- Restaurada a **maior resolução JPEG disponibilizada pelo A17**, preferida por padrão, inclusive para quem utilizava versões 1.1.x. O diagnóstico da lente principal mostra 4080×3060 no caminho de alta resolução, não 50 MP; o resultado real precisa ser confirmado no arquivo salvo. Perfil compatível CameraX pode reduzir resolução se o HAL rejeitar a configuração.
+- Modo **RETRATO**: segmentação neural pessoa/fundo com modelo `selfie_segmenter.tflite` oficial do MediaPipe, empacotado no APK pelo CI. Usa GPU quando o delegate inicia corretamente, com fallback CPU. Processamento **offline após a captura**; não há promessa de retrato em vídeo ao vivo.
+- Filtros locais configuráveis **Natural, Equilibrado e Máximo**: medição de brilho, correção moderada de cores, suavização de ruído e nitidez controlada; são ajustes de pixels e **não** redes neurais de super-resolução. Podem ser aplicados automaticamente a uma cópia.
+- Revisão pós-captura com ações **Original, Melhorar offline, Retrato, PNG, Gemini**. Original sempre preservado em `DCIM/LumaA17`; processamento local em `DCIM/LumaA17/Processadas`, IA Gemini em `DCIM/LumaA17/IA`.
+- Exportação PNG sem novas perdas de compressão sobre os pixels já decodificados do JPEG. PNG **não equivale a RAW**, não resgata detalhes previamente perdidos e pode ocupar dezenas de MB.
+- Visor expandido com recorte de preenchimento, opção de desligar, exposição inicial +0,3 EV com controle manual EV no visor, funcionalidades das lentes frontal e principal mantidas.
+- Vídeo continua limitado aos perfis reais do A17, com controle de bitrate e estabilização conforme capacidade da HAL, sem upscaling fake; áudio, pausa e retomada mantidos. **Não há fusão de múltiplas câmeras** sem suporte do fabricante e não há processamento generativo de vídeo em tempo real.
+- Gemini mantido como **opção em nuvem separada**, nunca obrigatório. Requer API key e internet; pode modificar detalhes da imagem. Não são enviados arquivos ao Google pelo recurso offline.
+- HEIC/HEVC não estão implementados em CameraX neste projeto. Não há conversão falsa por renomear extensões.
+- Build: JDK17 / Android SDK 36. A tarefa GitHub Actions baixa o modelo oficial de URL versionada `float16/1`, mostra SHA-256 no log, inclui dentro do APK e executa testes/lint. O código-fonte público NÃO contém tokens nem material privado.
+
+### Como verificar
+
+1. Na galeria confira as dimensões JPEG principal: com câmera livre do modo seguro, esperado até 4080×3060; comparar com a câmera Samsung.
+2. Tire retrato **sem internet** e confirme se foi salva cópia em `Processadas`. Se falhar na GPU, o MediaPipe tentará CPU.
+3. Exporte PNG e compare resolução e orientação, inclusive selfies.
+4. Compare brilho, nitidez e detalhes entre Original e Natural. Na condição de luz desfavorável, desative ajustes agressivos.
+5. Grave FHD por 30 s com áudio, em cada lente, pause/retome e confira galeria. O novo pós-processador não altera o vídeo original.
+6. Meça aquecimento e tempo em processamento local automático. Desative se afetar a responsividade.
+
 ## Correção de autenticação e teste Gemini · versão 1.1.1
 
 - Chaves do Google AI Studio iniciadas por `AQ.` **ou** `AIza` são aceitas sem bloqueio por prefixo. O Google migrou para chaves `AQ.`; o formato não é inválido por si só.
