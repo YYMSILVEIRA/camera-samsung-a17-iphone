@@ -34,6 +34,7 @@ import androidx.camera.core.DynamicRange;
 import androidx.camera.core.ExposureState;
 import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.ImageCapture;
+import androidx.camera.core.ImageCaptureCapabilities;
 import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.MeteringPoint;
 import androidx.camera.core.MirrorMode;
@@ -220,10 +221,12 @@ public final class CameraEngine {
             if (settings.video) {
                 List<Quality> supported = lens.qualities;
                 if (supported.isEmpty()) throw new IllegalStateException("A câmera não oferece um perfil de vídeo compatível");
-                // Prioritize the A17's documented real-time FHD path; never upscale to a fictitious 4K.
+                // Use only qualities actually advertised by the specific lens; never upscale.
                 List<Quality> desired = settings.videoHd || safe
                         ? Arrays.asList(Quality.HD, Quality.FHD, Quality.SD)
-                        : Arrays.asList(Quality.FHD, Quality.HD, Quality.SD);
+                        : settings.maximumVideoQuality
+                            ? Arrays.asList(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD)
+                            : Arrays.asList(Quality.FHD, Quality.HD, Quality.SD);
                 Quality chosen = null;
                 for (Quality q : desired) if (supported.contains(q)) { chosen = q; break; }
                 if (chosen == null) chosen = supported.get(0);
@@ -232,7 +235,7 @@ public final class CameraEngine {
                 Recorder.Builder rb = new Recorder.Builder()
                         .setQualitySelector(QualitySelector.from(chosen, FallbackStrategy.lowerQualityOrHigherThan(chosen)))
                         .setExecutor(io);
-                int bitrate = CapturePolicy.bitrate(height, settings.highBitrate);
+                int bitrate = CapturePolicy.bitrate(height, settings.highBitrate, settings.ultraBitrate);
                 if (!safe) rb.setTargetVideoEncodingBitRate(bitrate);
                 VideoCapture.Builder<Recorder> vb = new VideoCapture.Builder<>(rb.build())
                         .setDynamicRange(DynamicRange.SDR)
@@ -251,7 +254,12 @@ public final class CameraEngine {
             } else {
                 ImageCapture.Builder ib = new ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                        .setJpegQuality(97).setTargetRotation(rotation);
+                        .setJpegQuality(settings.jpegMaximum ? 100 : 97).setTargetRotation(rotation);
+                if (settings.ultraHdr && !isExtension() && !safe
+                        && ImageCapture.getImageCaptureCapabilities(lens.info).getSupportedOutputFormats()
+                            .contains(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR)) {
+                    ib.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
+                }
                 if (!isExtension() && !safe) {
                     ResolutionSelector.Builder resolution = new ResolutionSelector.Builder()
                             .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY);
@@ -470,9 +478,11 @@ public final class CameraEngine {
 
     public String sessionDescription() {
         if (settings.video) return videoDescription;
-        if (imageCapture == null || imageCapture.getResolutionInfo() == null) return "Foto · JPEG 97%";
+        if (imageCapture == null || imageCapture.getResolutionInfo() == null) return "Foto · JPEG " + (settings.jpegMaximum ? "100%" : "97%");
         Size size = imageCapture.getResolutionInfo().getResolution();
-        return String.format(Locale.US, "%.1f MP · JPEG 97%%", size.getWidth() * (double) size.getHeight() / 1_000_000);
+        return String.format(Locale.US, "%.1f MP · %s %d%%", size.getWidth() * (double) size.getHeight() / 1_000_000,
+                imageCapture.getOutputFormat() == ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR ? "Ultra HDR JPEG" : "JPEG",
+                settings.jpegMaximum ? 100 : 97);
     }
 
     public String diagnostic() throws Exception {
